@@ -10,6 +10,13 @@ changes (instant re-evaluation without re-paying the LLM).
 Coverage is printed first — treat low-coverage results as directional, not final.
 Env: PA_PROVIDER / PA_MODEL / PA_TEMPERATURE etc. must MATCH the run that filled
 the cache, or every key misses.
+
+Experiment knobs:
+  PA_INVERT=1  — take the OPPOSITE side of every cached decision (stop/target swapped,
+                 market entry at next open). Approximation: the original stop-order
+                 no-fill filter can't apply, and day-level halt sequences differ.
+  PA_MIN_RR=x  — relax the R:R floor for such experiments (inverted trades have
+                 RR<1 by construction and would otherwise all be vetoed).
 """
 import json
 import os
@@ -49,7 +56,13 @@ class CacheOnlyStrategy:
             return None
         self.hits += 1
         d = json.loads(f.read_text("utf-8"))
-        return LLMStrategy._to_signal(d, sidecar)
+        sig = LLMStrategy._to_signal(d, sidecar)
+        if sig is not None and os.getenv("PA_INVERT", "0") == "1":
+            from pab.backtest import Signal
+            sig = Signal("short" if sig.side == "long" else "long",
+                         stop=sig.target, target=sig.stop,
+                         reason=f"INVERTED {sig.reason}", entry_type="market")
+        return sig
 
 
 def main() -> None:
@@ -59,13 +72,16 @@ def main() -> None:
     sessions = complete_sessions(cont)[-int(os.getenv("N_SESSIONS", "128")):]
 
     strat = CacheOnlyStrategy(cfg)
+    ecfg = Config(min_rr=float(os.getenv("PA_MIN_RR", "1.0")))
     stats: dict = {}
     trades = []
     per_session_hits: dict[str, int] = {}
     for s in sessions:
         before = strat.hits
-        trades.extend(run_session(cont, s, strat, Config(), m1=m1, stats=stats))
+        trades.extend(run_session(cont, s, strat, ecfg, m1=m1, stats=stats))
         per_session_hits[s] = strat.hits - before
+    if os.getenv("PA_INVERT", "0") == "1":
+        print("*** INVERTED EXPERIMENT — opposite side, swapped levels, market entry ***")
 
     asked = strat.hits + strat.misses
     covered = sum(1 for v in per_session_hits.values() if v > 0)

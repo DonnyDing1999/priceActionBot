@@ -146,6 +146,40 @@ def test_m1_ignores_prefill_price_action():
     assert with_m1[0].entry == 101.5               # trigger 101.25 + slip
 
 
+# ---------- exits may run past the entry window ----------
+
+def test_exit_runs_past_window_to_target():
+    # Entry window ends at 09:40; the target is only reached at 09:50 — the position
+    # keeps working past the window instead of being force-flattened.
+    cfg = Config(window_end="09:40", flat_by="10:00")
+    cont = mk5([(100, 101, 99, 100.5),      # 09:30 signal bar
+                (101, 102, 100.5, 101.5),   # 09:35 fill bar, no exit
+                (101.5, 102, 100.8, 101),   # 09:40 window ends, still open
+                (101, 103, 100.9, 102.8),   # 09:45
+                (103, 106.75, 102.5, 106.5),  # 09:50 target hit
+                (106, 106.5, 105, 105.5),   # 09:55
+                (105.5, 106, 105, 105.8)])  # 10:00
+    sig = Signal("long", stop=95.5, target=106.5, entry_type="market")
+    trades = run_session(cont, SESSION, fire_at(1, sig), cfg)
+    assert len(trades) == 1
+    t = trades[0]
+    assert t.exit_reason == "target" and t.exit == 106.5
+    assert t.exit_ts == "09:50"             # after the 09:40 entry-window end
+
+
+def test_eod_force_flat_when_nothing_hits():
+    cfg = Config(window_end="09:40", flat_by="09:55")
+    cont = mk5([(100, 101, 99, 100.5), (101, 102, 100.5, 101.5),
+                (101.5, 102, 100.8, 101), (101, 102.5, 100.9, 102),
+                (102, 102.5, 101.5, 102), (102, 102.8, 101.8, 102.5)])  # ..09:55
+    sig = Signal("long", stop=95.5, target=120.0, entry_type="market")
+    trades = run_session(cont, SESSION, fire_at(1, sig), cfg)
+    assert len(trades) == 1
+    t = trades[0]
+    assert t.exit_reason == "eod" and t.exit_ts == "09:55"
+    assert t.exit == 102.5                  # close of the flat_by bar
+
+
 # ---------- strategy gate ----------
 
 def _sc(bar_index, bar_type="trend_bull", close=100.0, ema_gap=5.0,

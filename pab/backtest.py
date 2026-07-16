@@ -10,8 +10,13 @@ Strategy. Entry honors the signal's `entry_type`:
 Stops/targets are scanned bar-by-bar; when 1-minute bars are supplied (`m1=`), the
 scan runs minute-by-minute INSIDE each 5m bar, resolving stop-vs-target ordering and
 pre-fill vs post-fill price action exactly (ambiguity shrinks from 5 minutes to 1;
-within a single 1m bar the stop still wins, conservatively). Anything open is
-force-flat at the window's last bar. Commission + 1-tick adverse slippage are charged.
+within a single 1m bar the stop still wins, conservatively).
+
+ENTRIES stop at the window end, but an open position is NOT force-flattened there:
+it keeps working to its stop or target through the afternoon (exit scan runs on bars
+up to Config.flat_by) and is force-closed only at that bar's close ("eod") — never
+held overnight, so the per-trade $ cap stays enforceable. While a position works,
+no new entries happen (1 contract). Commission + 1-tick adverse slippage are charged.
 The four hard-risk caps gate every entry via RiskManager; pass `stats=` a dict to
 collect veto counts / signals / no-fills for observability.
 
@@ -42,7 +47,9 @@ class Config:
     max_trades: int = 3
     max_consec_loss: int = 2
     daily_loss_cap: float = 500.0
-    window_end: str = "11:25"         # last of the 24 bars (09:30-11:30)
+    window_end: str = "11:25"         # last ENTRY bar (signals come from 09:30-11:30 only)
+    flat_by: str = "15:55"            # open trades may run past the window to their stop/
+                                      # target; force-flat at this bar's close (no overnight)
 
 
 @dataclass
@@ -68,7 +75,7 @@ class Trade:
     pnl_pts: float
     pnl_usd: float
     r: float
-    exit_reason: str     # stop | target | eow
+    exit_reason: str     # stop | target | eod (force-flat at Config.flat_by)
     reason: str
 
 
@@ -118,6 +125,11 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
     win = session_window(cont, session_date, cfg.window_end)
     if len(win) < 2:
         return []
+    # exit frame: same bars as `win` plus the rest of the day up to flat_by; `win`
+    # is a prefix of `ext` (same 09:30 start), so bar indices line up
+    ext = session_window(cont, session_date, cfg.flat_by)
+    if len(ext) < len(win):
+        ext = win
     slip = cfg.slippage_ticks * cfg.tick
     rm = RiskManager(cfg)              # independent code-enforced risk layer (has final say)
     trades: list[Trade] = []
@@ -178,11 +190,11 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
             raw = float(nxt["open"])
             entry = raw + slip if sig.side == "long" else raw - slip
 
-        # ---- exit scan (minute-resolution inside each 5m bar when m1 is given) ----
+        # ---- exit scan: past the entry window if needed, minute-resolution when m1 given ----
         exit_px = exit_reason = None
         k = j
-        while k < len(win):
-            mins = mins_j if k == j else _minutes_of(m1, win.index[k])
+        while k < len(ext):
+            mins = mins_j if k == j else _minutes_of(m1, ext.index[k])
             if mins is not None:
                 start = fill_from if k == j else 0
                 for mi in range(start, len(mins)):
@@ -194,7 +206,7 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
                         break
             else:  # no 1m data -> whole-5m-bar range, stop-first (conservative)
                 exit_reason = _hit(sig.side, sig.stop, sig.target,
-                                   float(win.iloc[k]["high"]), float(win.iloc[k]["low"]))
+                                   float(ext.iloc[k]["high"]), float(ext.iloc[k]["low"]))
             if exit_reason:
                 if exit_reason == "stop":
                     exit_px = sig.stop - slip if sig.side == "long" else sig.stop + slip
@@ -202,16 +214,16 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
                     exit_px = sig.target
                 break
             k += 1
-        if exit_px is None:                              # force flat at window end
-            k = len(win) - 1
-            exit_px, exit_reason = float(win.iloc[k]["close"]), "eow"
+        if exit_px is None:                              # force flat at end of day (no overnight)
+            k = len(ext) - 1
+            exit_px, exit_reason = float(ext.iloc[k]["close"]), "eod"
 
         pnl_pts = (exit_px - entry) if sig.side == "long" else (entry - exit_px)
         pnl_usd = pnl_pts * cfg.point_value - cfg.commission_rt
         trades.append(Trade(
             session=session_date, side=sig.side,
             entry_ts=win.index[j].strftime("%H:%M"),
-            exit_ts=win.index[k].strftime("%H:%M"),
+            exit_ts=ext.index[k].strftime("%H:%M"),
             entry=round(entry, 2), exit=round(exit_px, 2), stop=sig.stop,
             target=sig.target, risk_pts=round(risk_pts, 2),
             pnl_pts=round(pnl_pts, 2), pnl_usd=round(pnl_usd, 2),
@@ -253,7 +265,7 @@ def summarize(trades: list[Trade]) -> dict:
         "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else None,
         "max_drawdown_usd": round(mdd, 2),
         "exits": {r: sum(1 for t in trades if t.exit_reason == r)
-                  for r in ("target", "stop", "eow")},
+                  for r in sorted({t.exit_reason for t in trades})},
     }
 
 

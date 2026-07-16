@@ -24,8 +24,9 @@ from pab.agent import AgentConfig, decide
 from pab.backtest import Signal
 
 
-LAST_SIGNAL_BAR = 19  # a signal here fills at bar 20 (11:05) — later entries only get
-                      # force-flattened at the window end with no room to work
+LAST_SIGNAL_BAR = 19  # a signal here fills at bar 20 (11:05). Entries stay in the opening
+                      # structure (our edge); open positions may run PAST the window to
+                      # their stop/target (engine force-flats only at end of day)
 
 
 def obvious_no_trade(sidecar: dict) -> Optional[str]:
