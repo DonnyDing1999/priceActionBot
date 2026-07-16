@@ -139,6 +139,18 @@ if the next bar never triggers it, the order is canceled and no trade happens (a
 signal filters itself out). Use "market" only when immediate entry at the next bar's open \
 is clearly right (e.g. strong always-in momentum already under way).
 
+BE SELECTIVE — this is the single biggest edge you control. A good session has 0-2 trades; \
+trading no bar all morning is often the CORRECT day. Only propose a trade when a knowledge-base \
+setup, the signal bar, and the context all agree. Checklist before any entry:
+- Signal bar quality: a trend bar closing near its extreme IN your direction. Never off a doji.
+- FOLLOW-THROUGH case (critical for stop entries): a stop entry buys above the signal bar / \
+sells below it, so the move must CONTINUE to pay you. Ask: is this a with-trend move with room, \
+or a breakout into resistance? Do NOT stop-enter when price is mid-range, inside a trading \
+range, or heading straight into a magnet (EMA, prior close, session high/low) closer than \
+your first target — those breakouts fail and you buy the top / sell the bottom of the leg.
+- DEFAULT to second entries (H2/L2). A first entry (H1/L1) is acceptable ONLY in a strong \
+spike or tight always-in trend with consecutive trend bars.
+
 HARD RULES (a separate code risk-layer also enforces these; a proposal that violates them is \
 discarded, wasting the call):
 - Trade only setups in your knowledge base. When in doubt, no_trade — most bars are no_trade.
@@ -147,16 +159,18 @@ discarded, wasting the call):
 - Never trade counter to the Always-In direction unless a full MTR has completed (closing \
   trendline break AND a failed test of the prior extreme).
 - Never chase: no entry on a climax/oversized bar; wait for a pullback or a second entry.
-- Geometry MUST hold: long -> stop < entry < target ; short -> target < entry < stop. \
-  Entry is the trigger price: for entry_type "stop" it is 1 tick beyond THIS bar's extreme; \
-  for "market" it is roughly the current bar's close.
-- Prefer second entries (H2/L2) over first entries.
-- No new trades after bar 24.
+- Geometry MUST hold around the TRIGGER price, not the close. For entry_type "stop" the \
+  trigger is 1 tick beyond THIS bar's extreme — e.g. long stop entry off a bar with high \
+  7600.00 triggers at 7600.25, so stop < 7600.25 < target, and risk = 7600.25 - stop. \
+  For "market" treat entry as roughly the current bar's close.
+- No new signals after bar 19 (a later entry just gets force-flattened at 11:30 with no room \
+  to work; the code gate enforces this cutoff).
 
 Output your decision in the required JSON shape. For no_trade, set stop and target to null. \
 For a trade, set stop and target as exact PRICES derived from the sidecar levels, keep risk \
-<= 15 points, and make target >= 1R (ideally 1-2R). In `reason`, cite the specific bar \
-evidence (bar numbers, bar types, EMA relationship, prior-day/gap context).
+<= 15 points, and make target >= 1R (ideally 1-2R) AND reachable in the remaining window. \
+In `reason`, cite the specific bar evidence (bar numbers, bar types, EMA relationship, \
+prior-day/gap context) and say WHY the move should follow through.
 
 KNOWLEDGE BASE (Al Brooks method — your own distilled cards):
 """

@@ -24,10 +24,15 @@ from pab.agent import AgentConfig, decide
 from pab.backtest import Signal
 
 
+LAST_SIGNAL_BAR = 19  # a signal here fills at bar 20 (11:05) — later entries only get
+                      # force-flattened at the window end with no room to work
+
+
 def obvious_no_trade(sidecar: dict) -> Optional[str]:
-    """Mechanical pre-filter: only the canonical nothing-bar — a doji near the EMA in
-    the middle of the session range (after the open structure has formed). Returns a
-    tag when the bar can be skipped without asking the LLM, else None."""
+    """Mechanical pre-filter: bars that can be skipped without asking the LLM. Kept
+    minimal and conservative — when in doubt, ask the LLM. Returns a tag or None."""
+    if sidecar["bar_index_from_open"] > LAST_SIGNAL_BAR:
+        return "too_late_in_window"
     b = sidecar["bar"]
     hi, lo = sidecar["session_high"], sidecar["session_low"]
     rng = hi - lo

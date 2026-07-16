@@ -146,6 +146,27 @@ def test_m1_ignores_prefill_price_action():
     assert with_m1[0].entry == 101.5               # trigger 101.25 + slip
 
 
+# ---------- strategy gate ----------
+
+def _sc(bar_index, bar_type="trend_bull", close=100.0, ema_gap=5.0,
+        s_hi=110.0, s_lo=90.0):
+    return {"bar_index_from_open": bar_index,
+            "bar": {"type": bar_type, "c": close},
+            "close_vs_ema_pts": ema_gap, "session_high": s_hi, "session_low": s_lo}
+
+
+def test_gate_blocks_late_and_doji_bars():
+    from pab.llm_strategy import obvious_no_trade
+    assert obvious_no_trade(_sc(20)) == "too_late_in_window"
+    assert obvious_no_trade(_sc(24)) == "too_late_in_window"
+    assert obvious_no_trade(_sc(19)) is None                    # last allowed signal bar
+    assert obvious_no_trade(
+        _sc(10, bar_type="doji", ema_gap=1.0)) == "doji_mid_range_near_ema"
+    assert obvious_no_trade(_sc(10, bar_type="trend_bull")) is None
+    assert obvious_no_trade(_sc(10, bar_type="doji", ema_gap=1.0,
+                                close=109.0)) is None           # near session high: ask LLM
+
+
 # ---------- veto observability ----------
 
 def test_veto_reasons_counted():
