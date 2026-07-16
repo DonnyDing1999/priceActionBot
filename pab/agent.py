@@ -310,7 +310,8 @@ def _decide_zhipu(system: str, image_bytes: Optional[bytes], user: str,
     key = os.getenv("ZHIPU_API_KEY") or os.getenv("ZHIPUAI_API_KEY")
     base = os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
     min_interval = float(os.getenv("ZHIPU_MIN_INTERVAL", "3"))
-    client = OpenAI(api_key=key, base_url=base, max_retries=0, timeout=120)
+    client = OpenAI(api_key=key, base_url=base, max_retries=0,
+                    timeout=float(os.getenv("ZHIPU_TIMEOUT", "180")))
     user = user + "\n\n" + _JSON_KEYS_HINT
     content: list = []
     if image_bytes is not None:
@@ -323,7 +324,7 @@ def _decide_zhipu(system: str, image_bytes: Optional[bytes], user: str,
         {"role": "user", "content": content},
     ]
     resp, last = None, None
-    for delay in (0, 6, 15, 30):  # backoff for free-tier "访问量过大"(1305) / 429
+    for delay in (0, 10, 20, 40, 80):  # long tail: free tier has whole overloaded MINUTES
         _zhipu_throttle(min_interval)
         if delay:
             time.sleep(delay)

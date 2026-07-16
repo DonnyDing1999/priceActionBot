@@ -79,12 +79,14 @@ def main() -> None:
                 journal.record_decision(s, d["bar"], d["time"], d["decision"],
                                         sidecar=d["sidecar"])
             journal.record_trades(s, trades)
+            journal.save()   # flush incrementally so a mid-run check can read journals
             pnl = sum(t.pnl_usd for t in trades)
             veto = stats.get("veto", {})
+            err = f" {strat.error_types}" if strat.error_types else ""
             print(f"[{s}] {len(trades)} trades, pnl {pnl:+.2f}$ | "
                   f"signals={stats.get('signals', 0)} no_fill={stats.get('no_fill', 0)} "
                   f"veto={veto if veto else '{}'} gated={strat.gated} "
-                  f"errors={strat.errors} cache_hits={strat.cache_hits}", flush=True)
+                  f"errors={strat.errors}{err} cache_hits={strat.cache_hits}", flush=True)
             for t in trades:
                 print(f"    {t.side:<5} {t.entry_ts}->{t.exit_ts} {t.pnl_usd:+.2f}$ "
                       f"({t.r:+.2f}R) {t.exit_reason} | {t.reason[:90]}", flush=True)

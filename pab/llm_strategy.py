@@ -49,6 +49,7 @@ class LLMStrategy:
         self.render_dir.mkdir(parents=True, exist_ok=True)
         self.decisions: list[dict] = []  # every bar: decision | gated | error (for journal)
         self.errors = 0                  # decision calls that failed -> no_trade
+        self.error_types: dict[str, int] = {}  # exception class -> count (diagnosis)
         self.gated = 0                   # bars skipped by the code gate (no LLM call)
         self.cache_hits = 0
 
@@ -80,8 +81,10 @@ class LLMStrategy:
             d = decide(sidecar, image_path, cfg=self.cfg)
         except Exception as e:  # noqa: BLE001 — any error on THIS bar -> no_trade, day survives
             self.errors += 1
+            et = type(e).__name__
+            self.error_types[et] = self.error_types.get(et, 0) + 1
             self._record(sidecar, {"action": "error",
-                                   "reason": f"{type(e).__name__}: {str(e)[:120]}"})
+                                   "reason": f"{et}: {str(e)[:120]}"})
             return None
         if d.get("_usage", {}).get("cached"):
             self.cache_hits += 1
