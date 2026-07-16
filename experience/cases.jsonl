@@ -1,0 +1,12 @@
+{"session": "2026-07-07", "regime": "normal_channel", "outcome": "success", "setup": "L2 trend resumption", "note": "在边际新高后，当价格反转并收于EMA20下方时，L2趋势延续设置是有效的。"}
+{"session": "2026-07-07", "regime": "normal_channel", "outcome": "success", "setup": "2nd-entry after failed bounce", "note": "在高潮后的反弹失败后，二次入场是有效的。"}
+{"session": "2026-07-07", "regime": "normal_channel", "outcome": "success", "setup": "L2 trend resumption", "note": "在2根K线反弹失败后，L2趋势延续设置是有效的。"}
+{"session": "2026-07-08", "regime": "trading_range", "outcome": "success", "setup": "spike-and-channel flag breakdown", "note": "Flag breakdown after a range low (bar14) was effective in a tight range, confirming bearish momentum."}
+{"session": "2026-07-08", "regime": "trend_bear", "outcome": "success", "setup": "trend resumption after failed reversal", "note": "A failed reversal (bar17 high) led to trend resumption, validating the bear trend and supporting the short entry."}
+{"session": "2026-07-09", "regime": "spike-and-channel", "outcome": "failure", "setup": "H2 pullback (spike-and-channel)", "note": "2nd pullbacks of opening spikes are valid KB setups, but losses are normal outcome noise even with proper risk management"}
+{"session": "2026-07-09", "regime": "trading_range", "outcome": "success", "setup": "failed-breakdown 2nd-entry", "note": "Failed-breakdown 2nd-entries in trading ranges are valid KB setups, but must trade with always_in direction (long when ail, short when ais) to avoid process errors"}
+{"session": "2026-07-10", "regime": "unknown", "outcome": "success", "setup": "H1 pullback / EMA test", "note": "Valid KB setup (EMA test pullback) with always_in (ail), R:R >=1 (1.7) — good process"}
+{"session": "2026-07-10", "regime": "unknown", "outcome": "success", "setup": "H2 flag continuation", "note": "Valid KB setup (flag) with always_in (ail), but R:R <1 (0.93) — process error, must enforce R:R >=1"}
+{"session": "2026-07-10", "regime": "unknown", "outcome": "success", "setup": "failed reversal, trend resumption", "note": "Valid KB setup (failed reversal) with always_in (ais), R:R >=1 (1.52) — good process"}
+{"session": "2026-07-13", "regime": "tight_channel", "outcome": "failure", "setup": "failed-breakdown 2nd-entry", "note": "2nd entries in tight channels have lower success; consider smaller risk or avoiding."}
+{"session": "2026-07-13", "regime": "tight_channel", "outcome": "failure", "setup": "L2 trend resumption", "note": "Bounce failures in tight channels may require more confirmation before entry."}

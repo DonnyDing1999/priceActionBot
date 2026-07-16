@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Project data (regenerable market data; do not commit blobs)
+data/
+!data/README.md
+
+# Licensed vendor data (Databento downloads stay local)
+GLBX-*.zip
+*.dbn
+*.dbn.zst
+
+# Secrets / local config
+.env
+*.local
+
+# OS
+.DS_Store
