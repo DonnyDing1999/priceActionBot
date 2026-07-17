@@ -42,17 +42,22 @@ FLAT_BY = "15:55"                               # cancel + flatten, never overni
 
 
 class LiveConfig:
-    """Duck-typed cfg for RiskManager (same fields the backtest Config carries)."""
+    """Duck-typed cfg for RiskManager (same fields the backtest Config carries).
+    All money knobs are env-overridable; point value scales with the actual qty
+    (spec.point_value_usd is defined at spec.qty units)."""
 
-    def __init__(self, spec):
+    def __init__(self, spec, qty: Optional[int] = None):
+        unit_pv = spec.point_value_usd / spec.qty      # $/pt per single share|contract
+        self.qty = qty if qty is not None else spec.qty
         self.tick = spec.tick
-        self.point_value = spec.point_value_usd
-        self.per_trade_risk_usd = spec.per_trade_risk_usd
+        self.point_value = unit_pv * self.qty
+        self.per_trade_risk_usd = float(os.getenv("PA_RISK_USD",
+                                                  str(spec.per_trade_risk_usd)))
         self.min_risk_pts = spec.min_risk_pts
-        self.min_rr = 1.0
-        self.max_trades = 3
-        self.max_consec_loss = 2
-        self.daily_loss_cap = 500.0
+        self.min_rr = float(os.getenv("PA_MIN_RR", "1.0"))
+        self.max_trades = int(os.getenv("PA_MAX_TRADES", "3"))
+        self.max_consec_loss = int(os.getenv("PA_MAX_CONSEC_LOSS", "2"))
+        self.daily_loss_cap = float(os.getenv("PA_DAILY_LOSS_CAP", "500"))
 
 
 def _clients():
@@ -107,7 +112,7 @@ class LiveTrader:
         self.qty = int(os.getenv("LIVE_QTY", str(self.spec.qty)))
         self.cfg = AgentConfig()
         self.data, self.trading = _clients()
-        self.rm = RiskManager(LiveConfig(self.spec))
+        self.rm = RiskManager(LiveConfig(self.spec, self.qty))
         self.session = str(pd.Timestamp.now(tz=ET).date())
         self.journal = Journal(run_id="live", provider=self.cfg.provider,
                                model=self.cfg.resolved_model())

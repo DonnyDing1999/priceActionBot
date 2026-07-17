@@ -309,6 +309,20 @@ def test_mes_system_prompt_unchanged_by_instrument_refactor():
     assert "50 shares of SPY" in spy and spy != s
 
 
+def test_live_config_scales_with_qty(monkeypatch):
+    from pab.instruments import SPY
+    from pab.live import LiveConfig
+    c50 = LiveConfig(SPY, 50)
+    assert c50.point_value == 50.0 and c50.per_trade_risk_usd == 75.0
+    c10 = LiveConfig(SPY, 10)          # smaller size -> wider allowed stop in pts
+    assert c10.point_value == 10.0
+    assert c10.per_trade_risk_usd / c10.point_value == 7.5
+    monkeypatch.setenv("PA_RISK_USD", "40")
+    monkeypatch.setenv("PA_DAILY_LOSS_CAP", "200")
+    c = LiveConfig(SPY, 50)
+    assert c.per_trade_risk_usd == 40.0 and c.daily_loss_cap == 200.0
+
+
 def test_live_to_5m_closed_only():
     from pab.live import to_5m
     now = pd.Timestamp.now(tz=ET)
