@@ -55,8 +55,9 @@ class Journal:
         self._bucket(session)["trades"].extend(
             asdict(t) if is_dataclass(t) else dict(t) for t in trades)
 
-    def save(self) -> list[str]:
-        JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    def save(self, dir: Optional[Path] = None) -> list[str]:
+        out_dir = Path(dir) if dir else JOURNAL_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
         paths = []
         for s, rec in self.sessions.items():
             day_pnl = round(sum(t["pnl_usd"] for t in rec["trades"]), 2)
@@ -64,7 +65,7 @@ class Journal:
                             "n_decisions": len(rec["decisions"]),
                             "n_trades": len(rec["trades"]), "day_pnl_usd": day_pnl},
                    **rec}
-            p = JOURNAL_DIR / f"{s}.json"
+            p = out_dir / f"{s}.json"
             p.write_text(json.dumps(out, ensure_ascii=False, indent=2), "utf-8")
             paths.append(str(p))
         return paths

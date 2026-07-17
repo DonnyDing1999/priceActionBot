@@ -282,6 +282,47 @@ def test_routed_system_smaller_than_full():
         assert "DIAGNOSIS HINT" in routed and rg in routed
 
 
+# ---------- live line: instruments + 5m aggregation ----------
+
+def test_spy_spec_sidecar_config():
+    from pab.features import build_sidecar
+    from pab.instruments import SPY
+    cont = mk5([(760.0, 761.0, 759.0, 760.5), (760.5, 761.5, 760.0, 761.0)])
+    sc = build_sidecar(cont, cont.index[-1], symbol="SPY", spec=SPY)
+    cfg = sc["config"]
+    assert cfg["tick"] == 0.01 and cfg["point_value_usd"] == 50.0
+    assert cfg["per_trade_risk_pts"] == 1.5 and cfg["qty"] == 50
+    # default (spec=None) keeps the historical MES config byte-identical
+    mes = build_sidecar(cont, cont.index[-1])["config"]
+    assert mes == {"tick": 0.25, "point_value_usd": 5.0,
+                   "per_trade_risk_usd": 75.0, "per_trade_risk_pts": 15.0}
+
+
+def test_mes_system_prompt_unchanged_by_instrument_refactor():
+    # the in-flight eval's decision-cache keys depend on these exact bytes
+    from pab.agent import _system
+    s = _system(False, "trend", "mes")
+    assert s.startswith("You are an Al Brooks price-action trader trading 1 micro "
+                        "contract of MES (Micro E-mini S&P 500) on the 5-minute chart. "
+                        "You ENTER only during the first two hours")
+    spy = _system(False, "trend", "spy")
+    assert "50 shares of SPY" in spy and spy != s
+
+
+def test_live_to_5m_closed_only():
+    from pab.live import to_5m
+    now = pd.Timestamp.now(tz=ET)
+    start = (now - pd.Timedelta(minutes=13)).floor("5min")  # spans 3 buckets
+    idx = pd.date_range(start, periods=13, freq="1min")
+    m1 = pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0,
+                       "close": 100.5, "volume": 10}, index=idx)
+    bars = to_5m(m1)
+    assert len(bars) >= 1
+    assert bars.index[0] == start                      # START-stamped
+    assert all(ts + pd.Timedelta(minutes=5) <= now for ts in bars.index)  # closed only
+    assert bars.iloc[0]["volume"] == 50                # 5 x 1m aggregated
+
+
 # ---------- veto observability ----------
 
 def test_veto_reasons_counted():

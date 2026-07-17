@@ -1,0 +1,29 @@
+# SPY live paper-trading loop — systemd unit for the GCP VM.
+# Install:
+#   sudo cp deploy/pab-live.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pab-live
+# Watch:   journalctl -u pab-live -f
+# Stop:    sudo systemctl stop pab-live      (or: touch ~/priceActionBot/KILL)
+#
+# The loop exits after the 15:55 ET flatten; Restart=always + RestartSec brings
+# it back up, and it idles until the next session window. Timer-gating to RTH
+# hours can come later — the loop itself is safe to run 24/7 (it only acts
+# inside 09:30-15:55 ET).
+
+[Unit]
+Description=priceActionBot SPY paper loop (Alpaca)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bytedance
+WorkingDirectory=/home/bytedance/priceActionBot
+ExecStart=/home/bytedance/priceActionBot/.venv/bin/python scripts/live_spy.py
+Restart=always
+RestartSec=300
+StandardOutput=append:/home/bytedance/priceActionBot/live_spy.log
+StandardError=append:/home/bytedance/priceActionBot/live_spy.log
+
+[Install]
+WantedBy=multi-user.target

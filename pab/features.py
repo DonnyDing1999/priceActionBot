@@ -25,8 +25,10 @@ def _bar_type(o: float, h: float, l: float, c: float) -> str:
 
 def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
                   symbol: str = "ES=F", ema_period: int = 20,
-                  recent_n: int = 6) -> dict:
-    """Structured numeric context as of `current_ts` (inclusive), no future bars used."""
+                  recent_n: int = 6, spec=None) -> dict:
+    """Structured numeric context as of `current_ts` (inclusive), no future bars used.
+    `spec` (pab.instruments.InstrumentSpec) overrides the risk-config block for
+    non-MES instruments; None keeps the historical MES values byte-identical."""
     hist = add_ema(cont[cont.index <= current_ts], ema_period)
     if hist.empty:
         raise ValueError("no bars at/before current_ts")
@@ -126,9 +128,14 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
         "magnets": magnets,
         "session_bars": session_bars,
         "recent_bars": recent_bars,
-        "config": {"tick": TICK, "point_value_usd": POINT_VALUE_MES,
-                   "per_trade_risk_usd": PER_TRADE_RISK_USD,
-                   "per_trade_risk_pts": round(PER_TRADE_RISK_USD / POINT_VALUE_MES, 2)},
+        "config": ({"tick": TICK, "point_value_usd": POINT_VALUE_MES,
+                    "per_trade_risk_usd": PER_TRADE_RISK_USD,
+                    "per_trade_risk_pts": round(PER_TRADE_RISK_USD / POINT_VALUE_MES, 2)}
+                   if spec is None else
+                   {"tick": spec.tick, "point_value_usd": spec.point_value_usd,
+                    "per_trade_risk_usd": spec.per_trade_risk_usd,
+                    "per_trade_risk_pts": round(spec.per_trade_risk_pts, 2),
+                    "qty": spec.qty}),
     }
 
 

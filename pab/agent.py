@@ -89,6 +89,8 @@ class AgentConfig:
     effort: str = field(default_factory=lambda: os.getenv("PA_EFFORT", "medium"))
     vision: bool = field(
         default_factory=lambda: os.getenv("PA_VISION", "0").lower() in ("1", "true", "yes"))
+    instrument: str = field(
+        default_factory=lambda: os.getenv("PA_INSTRUMENT", "mes"))
     temperature: float = field(
         default_factory=lambda: float(os.getenv("PA_TEMPERATURE", "0.1")))
     cache: bool = field(
@@ -113,10 +115,8 @@ def key_status(cfg: Optional[AgentConfig] = None) -> dict:
     return {"ok": ok, "provider": cfg.provider, "model": cfg.resolved_model(), "hint": hint}
 
 
-_ROLE = """You are an Al Brooks price-action trader trading 1 micro contract of MES \
-(Micro E-mini S&P 500) on the 5-minute chart. You ENTER only during the first two hours of \
-the US regular session (09:30-11:30 ET); an open position is then managed to its stop or \
-target and force-closed only at the 16:00 session close (never held overnight)."""
+# role paragraph now lives on the InstrumentSpec (pab.instruments) — MES text is
+# byte-identical to the historical prompt so existing decision-cache keys survive
 
 _PERCEPTION_NUMERIC = """You are given a numeric sidecar for the CURRENT bar (no image). \
 `session_bars` is the FULL developing session from the 09:30 open to now — each entry has its \
@@ -245,11 +245,14 @@ def _kb_block(regime: Optional[str]) -> str:
     return "\n\n".join(parts)
 
 
-def _system(vision: bool = False, regime: Optional[str] = None) -> str:
-    key = (vision, regime if _route_enabled() else None)
+def _system(vision: bool = False, regime: Optional[str] = None,
+            instrument: str = "mes") -> str:
+    from pab.instruments import get_spec
+    key = (vision, regime if _route_enabled() else None, instrument)
     if key not in _SYSTEM_CACHE:
         perception = _PERCEPTION_VISION if vision else _PERCEPTION_NUMERIC
-        _SYSTEM_CACHE[key] = ("\n\n".join([_ROLE, perception, SYSTEM_RULES])
+        _SYSTEM_CACHE[key] = ("\n\n".join([get_spec(instrument).role_text,
+                                           perception, SYSTEM_RULES])
                               + _kb_block(key[1]))
     return _SYSTEM_CACHE[key]
 
@@ -469,7 +472,7 @@ def decide(sidecar: dict, image_path: str | Path | None = None, *,
         regime = classify_regime(sidecar)
     except Exception:  # noqa: BLE001 — partial sidecars (tools/tests) -> full KB
         regime = None
-    system = _system(cfg.vision, regime)
+    system = _system(cfg.vision, regime, cfg.instrument)
     user = _user_text(sidecar, regime)
 
     cache_file = None
