@@ -56,6 +56,10 @@ class RiskManager:
         risk = abs(entry - stop)
         if risk <= 0:
             return RiskDecision(False, "zero_risk")
+        # micro-stop floor — below ~2pts, fixed costs (commission + slippage) dominate
+        # the trade's R math (observed: 0.5pt-risk trades all land ~-2R on costs alone)
+        if risk < getattr(c, "min_risk_pts", 0.0):
+            return RiskDecision(False, "risk_too_small")
         # per-trade $ cap — reject if stop too wide (never widen)
         if risk * c.point_value > c.per_trade_risk_usd:
             return RiskDecision(False, "risk_gt_cap")

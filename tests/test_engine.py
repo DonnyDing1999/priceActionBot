@@ -56,6 +56,13 @@ def test_risk_rr_floor_and_cap():
     assert rm.validate_entry("long", 100.0, 95.0, 106.0).ok
 
 
+def test_risk_micro_stop_floor():
+    rm = RiskManager(Config())
+    # 0.5pt risk: fixed costs (~0.8pt) exceed the risk itself -> reject
+    assert rm.validate_entry("long", 100.0, 99.5, 101.0).reason == "risk_too_small"
+    assert rm.validate_entry("long", 100.0, 98.0, 102.5).ok      # 2.0pt = at the floor
+
+
 def test_risk_circuit_breakers():
     rm = RiskManager(Config())
     rm.on_trade_closed(-10); rm.on_trade_closed(-10)

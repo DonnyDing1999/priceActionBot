@@ -341,7 +341,7 @@ def _decide_zhipu(system: str, image_bytes: Optional[bytes], user: str,
         {"role": "system", "content": system},
         {"role": "user", "content": content},
     ]
-    resp, last = None, None
+    resp, out, last = None, None, None
     for delay in (0, 10, 20, 40, 80):  # long tail: free tier has whole overloaded MINUTES
         _zhipu_throttle(min_interval)
         if delay:
@@ -351,7 +351,6 @@ def _decide_zhipu(system: str, image_bytes: Optional[bytes], user: str,
                 model=cfg.resolved_model(), max_tokens=cfg.max_tokens,
                 temperature=cfg.temperature,
                 messages=messages, response_format={"type": "json_object"})
-            break
         except Exception as e:  # noqa: BLE001
             last = e
             etype = type(e).__name__
@@ -362,9 +361,14 @@ def _decide_zhipu(system: str, image_bytes: Optional[bytes], user: str,
             if transient:  # rate-limit OR flaky-network -> back off and retry
                 continue
             raise
-    if resp is None:
+        try:  # malformed JSON (top free-tier failure) is transient too — retry, don't drop the bar
+            out = _loads_lenient(resp.choices[0].message.content)
+            break
+        except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
+            last = e
+            continue
+    if out is None:
         raise last
-    out = _loads_lenient(resp.choices[0].message.content)
     u = getattr(resp, "usage", None)
     out["_usage"] = {"provider": "zhipu", "model": cfg.resolved_model(),
                      "input": getattr(u, "prompt_tokens", 0) if u else 0,

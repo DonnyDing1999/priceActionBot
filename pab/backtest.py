@@ -43,6 +43,8 @@ class Config:
     commission_rt: float = 1.5        # round-turn $
     slippage_ticks: int = 1           # adverse, per fill (entry + stop)
     per_trade_risk_usd: float = 75.0
+    min_risk_pts: float = 2.0         # reject micro-stops: commission+slippage (~0.8pt)
+                                      # would dominate the R math below this
     min_rr: float = 1.0               # reward:risk floor on the near target
     max_trades: int = 3
     max_consec_loss: int = 2
