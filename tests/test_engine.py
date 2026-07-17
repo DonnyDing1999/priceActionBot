@@ -337,6 +337,29 @@ def test_live_to_5m_closed_only():
     assert bars.iloc[0]["volume"] == 50                # 5 x 1m aggregated
 
 
+# ---------- capital metrics ----------
+
+def test_capital_metrics():
+    from pab.metrics import capital_metrics
+    trades = [
+        {"session": "2026-07-06", "entry_ts": "09:40", "exit_ts": "10:10",
+         "entry": 7000.0, "risk_pts": 10.0, "pnl_usd": +50.0, "exit_reason": "target"},
+        {"session": "2026-07-06", "entry_ts": "10:30", "exit_ts": "10:35",
+         "entry": 7010.0, "risk_pts": 8.0, "pnl_usd": -40.0, "exit_reason": "stop"},
+        {"session": "2026-07-07", "entry_ts": "09:45", "exit_ts": "11:45",
+         "entry": 7020.0, "risk_pts": 12.0, "pnl_usd": +100.0, "exit_reason": "target"},
+    ]
+    m = capital_metrics(trades, capital=5000.0, n_sessions=4)  # 2 flat days observed
+    u, r, t = m["utilization"], m["returns"], m["trading"]
+    assert u["leverage_while_in_market"] == round(7010 * 5 / 5000, 2)
+    assert u["time_in_market_min_per_day"] == round((30 + 5 + 120) / 4, 1)
+    assert r["total_usd"] == 110.0 and r["roc_period_pct"] == 2.2
+    assert r["max_drawdown_usd"] == 0.0    # daily equity 10 -> 110 never dips below peak
+    assert t["trades_per_session"] == 0.75 and t["participation_pct"] == 50.0
+    assert t["max_loss_streak"] == 1 and t["max_win_streak"] == 1
+    assert t["risk_budget_usage_median_pct"] == round(100 * (10 * 5 / 75), 0)
+
+
 # ---------- veto observability ----------
 
 def test_veto_reasons_counted():
