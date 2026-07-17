@@ -25,8 +25,12 @@ Extract DURABLE lessons with STRICT process-vs-outcome discipline:
 - A trade that FOLLOWED the rules but lost is OUTCOME NOISE — do NOT punish it or invent a \
 rule from it. Losing trades are normal; a good process still loses ~40-60% of the time.
 - A trade that BROKE a rule is a PROCESS ERROR — flag it (rules: only KB setups; per-trade \
-risk <=15 pts; R:R>=1; trade WITH always_in unless a completed MTR; prefer 2nd entries; \
-don't chase a climax/oversized bar; no new trade after ~bar 20; avoid the middle of a range).
+risk <=15 pts AND stop >=2 pts; R:R>=1; trade WITH always_in unless a completed MTR; DEFAULT \
+to 2nd entries — H1/L1 only in a strong spike/tight trend; stop entries need a follow-through \
+case, never into a nearby magnet (yday high/low/close, overnight high/low, session high/low, \
+EMA) closer than the first target; never off a doji; don't chase a climax/oversized bar; no \
+new signals after bar 19; open positions run to stop/target — an "eod" force-flat at the \
+16:00 close is normal management, not an error).
 - Look for PATTERNS across the day, not one-off noise. This is a tiny sample — most lessons \
 are tentative. If the day is just noise, say so and return few/no lessons.
 

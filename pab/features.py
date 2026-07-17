@@ -45,6 +45,29 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
     sess_open_px = float(session["open"].iloc[0]) if len(session) else o
     gap = round(sess_open_px - prior_close, 2) if prior_close is not None else None
 
+    # magnet levels (no-lookahead: strictly before today's open): prior day's RTH
+    # high/low and the overnight (post-16:00 -> pre-open) high/low. Brooks: price is
+    # drawn to these; stop entries INTO a nearby magnet are low-quality.
+    before = cont[cont.index < open_ts]
+    magnets = []
+    prior_dates = sorted({d for d in before.index.date if d < session_date})
+    if prior_dates:
+        d1 = prior_dates[-1]
+        day1 = before[before.index.date == d1]
+        hhmm1 = day1.index.strftime("%H:%M")
+        rth1 = day1[(hhmm1 >= "09:30") & (hhmm1 <= "16:00")]
+        src1 = rth1 if len(rth1) else day1
+        overnight = before[before.index > src1.index[-1]]
+        levels = [("yday_high", float(src1["high"].max())),
+                  ("yday_low", float(src1["low"].min()))]
+        if prior_close is not None:
+            levels.append(("yday_close", prior_close))
+        if len(overnight):
+            levels += [("overnight_high", float(overnight["high"].max())),
+                       ("overnight_low", float(overnight["low"].min()))]
+        magnets = [{"name": nm, "px": round(px, 2), "pts_from_close": round(px - c, 2)}
+                   for nm, px in levels]
+
     ema = float(cur[ema_col])
     ema_prev = float(hist[ema_col].iloc[-4]) if len(hist) >= 4 else ema
 
@@ -100,9 +123,26 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
         "pts_below_session_high": round(sess_hi - c, 2),
         "pts_above_session_low": round(c - sess_lo, 2),
         "always_in_hint": ai,
+        "magnets": magnets,
         "session_bars": session_bars,
         "recent_bars": recent_bars,
         "config": {"tick": TICK, "point_value_usd": POINT_VALUE_MES,
                    "per_trade_risk_usd": PER_TRADE_RISK_USD,
                    "per_trade_risk_pts": round(PER_TRADE_RISK_USD / POINT_VALUE_MES, 2)},
     }
+
+
+def classify_regime(sidecar: dict) -> str:
+    """Coarse, deterministic regime from the sidecar (no LLM, no lookahead) — used to
+    ROUTE which setup cards enter the prompt, and to retrieve regime-matched experience.
+    Deliberately generous: it narrows the card set, the model still makes the read.
+      open  — first ~6 bars, session structure not yet formed
+      trend — always-in one side + EMA slope/extension agree
+      range — everything else (two-sided, EMA flat, price straddling)"""
+    if sidecar["bar_index_from_open"] <= 6:
+        return "open"
+    if (sidecar["always_in_hint"] in ("ail", "ais")
+            and (abs(sidecar["ema_slope_pts_3bar"]) >= 1.0
+                 or abs(sidecar["close_vs_ema_pts"]) >= 6.0)):
+        return "trend"
+    return "range"

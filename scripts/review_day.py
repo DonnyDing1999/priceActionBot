@@ -15,8 +15,12 @@ def main() -> None:
         print(f"No key for provider '{st['provider']}'. Put {st['hint']} in .env.")
         return
 
-    sessions = sorted({p.name[:-5] for p in JDIR.glob("*.json") if ".review." not in p.name})
-    print(f"reviewing {len(sessions)} sessions with {st['provider']}/{st['model']}\n")
+    all_sessions = sorted({p.name[:-5] for p in JDIR.glob("*.json")
+                           if ".review." not in p.name})
+    sessions = [s for s in all_sessions if not (JDIR / f"{s}.review.json").exists()]
+    print(f"reviewing {len(sessions)} sessions "
+          f"({len(all_sessions) - len(sessions)} already reviewed, skipped) "
+          f"with {st['provider']}/{st['model']}\n")
 
     for s in sessions:
         try:

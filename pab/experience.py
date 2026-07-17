@@ -29,13 +29,16 @@ def add_cases(cases: list[dict], session: str) -> int:
     return n
 
 
-def read_cases(regime: str | None = None, k: int = 5) -> list[dict]:
+def read_cases(regime: str | tuple[str, ...] | None = None, k: int = 5) -> list[dict]:
+    """Most-recent k cases, preferring regime matches. `regime` may be one regime or a
+    tuple (a coarse family, e.g. all trend-like regimes); falls back to recent-any."""
     if not CASES.exists():
         return []
     rows = [json.loads(x) for x in CASES.read_text("utf-8").splitlines() if x.strip()]
     if regime:
-        matched = [r for r in rows if r.get("regime") == regime]
-        rows = matched or rows          # fall back to recent-any if none for this regime
+        want = (regime,) if isinstance(regime, str) else tuple(regime)
+        matched = [r for r in rows if r.get("regime") in want]
+        rows = matched or rows          # fall back to recent-any if none for this family
     return rows[-k:]
 
 

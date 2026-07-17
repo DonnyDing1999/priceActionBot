@@ -124,8 +124,10 @@ index from the open (i), time (t), OHLC (o/h/l/c), bar type, close position in i
 (cp, 0=low 1=high), and the 20-EMA value at that bar (e). READ THIS SEQUENCE BAR-BY-BAR the \
 way Al Brooks reads a chart: count the swings (H1/H2/L1/L2), identify spikes/channels/ \
 trading-ranges, track the Always-In direction, spot pullbacks to the EMA, and locate the \
-CURRENT (last) bar in that structure. The other sidecar fields give exact levels for stops/ \
-targets ("numbers for the price"). The numbers ARE your chart."""
+CURRENT (last) bar in that structure. `magnets` lists the key magnet LEVELS — yesterday's \
+high/low/close and the overnight high/low — each with its signed distance from the current \
+close (positive = above). The other sidecar fields give exact levels for stops/targets \
+("numbers for the price"). The numbers ARE your chart."""
 
 _PERCEPTION_VISION = """You are given, for the CURRENT bar: (1) a rendered 5-minute \
 candlestick chart with a 20-EMA, the prior-day close line, an open marker, and bar numbers \
@@ -147,8 +149,10 @@ setup, the signal bar, and the context all agree. Checklist before any entry:
 - FOLLOW-THROUGH case (critical for stop entries): a stop entry buys above the signal bar / \
 sells below it, so the move must CONTINUE to pay you. Ask: is this a with-trend move with room, \
 or a breakout into resistance? Do NOT stop-enter when price is mid-range, inside a trading \
-range, or heading straight into a magnet (EMA, prior close, session high/low) closer than \
-your first target — those breakouts fail and you buy the top / sell the bottom of the leg.
+range, or heading straight into a magnet closer than your first target — those breakouts fail \
+and you buy the top / sell the bottom of the leg. CHECK the `magnets` list (yday high/low/ \
+close, overnight high/low, plus the session high/low and EMA): if one sits between your \
+entry and your target, either target the near side of it or pass.
 - DEFAULT to second entries (H2/L2). A first entry (H1/L1) is acceptable ONLY in a strong \
 spike or tight always-in trend with consecutive trend bars.
 
@@ -179,31 +183,89 @@ prior-day/gap context) and say WHY the move should follow through.
 KNOWLEDGE BASE (Al Brooks method — your own distilled cards):
 """
 
-_SYSTEM_CACHE: dict[bool, str] = {}
+# ---- two-stage diagnose -> route: a deterministic regime classifier (pab.features.
+# classify_regime, zero LLM cost) picks WHICH setup cards enter the prompt. Core
+# principles are always included; the full setup INDEX is always listed so the model
+# knows what exists even when a card is not attached. PA_ROUTE=0 restores the full KB.
+CORE_PRINCIPLES = [
+    "market-cycle-model", "always-in", "traders-equation", "signal-bar-quality",
+    "second-entry-higher-probability", "bar-by-bar-reading", "bar-types-and-signal-bars",
+]
+REGIME_PRINCIPLES = {
+    "open": ["high-low-of-day-forms-early", "opening-breakout-50pct-reversal"],
+    "trend": ["measured-move"],
+    "range": [],
+}
+REGIME_SETUPS = {
+    "open": ["opening-breakout-mode", "opening-18bar-range-breakout",
+             "opening-trend-resumption", "failed-breakout-yesterday-2nd-entry",
+             "spike-and-channel", "breakout-failure-and-test"],
+    "trend": ["channel-pullback-h1h2-l1l2", "spike-and-channel", "micro-channel",
+              "opening-trend-resumption", "twenty-gap-bar", "wedge", "final-flag",
+              "major-trend-reversal"],
+    "range": ["trading-range-fade", "tight-range-fade", "triangle",
+              "breakout-failure-and-test", "double-top-bottom",
+              "magnet-and-trapped-traders", "failed-breakout-yesterday-2nd-entry"],
+}
+
+_CARDS_CACHE: dict[str, dict[str, str]] = {}
+_SYSTEM_CACHE: dict[tuple, str] = {}
 
 
-def _load_cards() -> str:
-    parts = []
-    for sub in ("principles", "setups"):
+def _cards(sub: str) -> dict[str, str]:
+    if sub not in _CARDS_CACHE:
         d = KB / sub
-        if not d.exists():
-            continue
-        for f in sorted(d.glob("*.md")):
-            parts.append(f"### {sub}/{f.stem}\n{f.read_text(encoding='utf-8')}")
+        _CARDS_CACHE[sub] = {f.stem: f.read_text(encoding="utf-8")
+                             for f in sorted(d.glob("*.md"))} if d.exists() else {}
+    return _CARDS_CACHE[sub]
+
+
+def _route_enabled() -> bool:
+    return os.getenv("PA_ROUTE", "1").lower() in ("1", "true", "yes")
+
+
+def _kb_block(regime: Optional[str]) -> str:
+    prin, setups = _cards("principles"), _cards("setups")
+    if regime is None or regime not in REGIME_SETUPS or not _route_enabled():
+        names_p, names_s = list(prin), list(setups)   # full KB (smoke/review/route-off)
+        note = ""
+    else:
+        names_p = [n for n in CORE_PRINCIPLES if n in prin] \
+            + [n for n in REGIME_PRINCIPLES[regime] if n in prin]
+        names_s = [n for n in REGIME_SETUPS[regime] if n in setups]
+        note = (f"\nDIAGNOSIS HINT: a code pre-classifier reads this bar's regime as "
+                f"'{regime}' (open|trend|range). The setup cards below are the subset "
+                f"relevant to that regime; core principles are always included. Full "
+                f"setup index (exists in your KB even when not attached): "
+                + ", ".join(sorted(setups)) + ". Trust your own bar-by-bar read if it "
+                "differs, but only propose setups from your knowledge base.\n")
+    parts = [note] if note else []
+    parts += [f"### principles/{n}\n{prin[n]}" for n in names_p]
+    parts += [f"### setups/{n}\n{setups[n]}" for n in names_s]
     return "\n\n".join(parts)
 
 
-def _system(vision: bool = False) -> str:
-    if vision not in _SYSTEM_CACHE:
+def _system(vision: bool = False, regime: Optional[str] = None) -> str:
+    key = (vision, regime if _route_enabled() else None)
+    if key not in _SYSTEM_CACHE:
         perception = _PERCEPTION_VISION if vision else _PERCEPTION_NUMERIC
-        _SYSTEM_CACHE[vision] = ("\n\n".join([_ROLE, perception, SYSTEM_RULES])
-                                 + _load_cards())
-    return _SYSTEM_CACHE[vision]
+        _SYSTEM_CACHE[key] = ("\n\n".join([_ROLE, perception, SYSTEM_RULES])
+                              + _kb_block(key[1]))
+    return _SYSTEM_CACHE[key]
 
 
-def _user_text(sidecar: dict) -> str:
+# coarse routing regime -> the review agent's finer regime enum (experience retrieval)
+_REGIME_FAMILY = {
+    "trend": ("spike", "micro_channel", "tight_channel", "normal_channel",
+              "broad_channel"),
+    "range": ("trading_range", "extreme_tr"),
+    "open": None,   # opening bars: any recent lesson is welcome
+}
+
+
+def _user_text(sidecar: dict, regime: Optional[str] = None) -> str:
     from pab.experience import as_prompt_block, read_cases  # closed loop: reviewed lessons
-    exp = as_prompt_block(read_cases(k=6))
+    exp = as_prompt_block(read_cases(regime=_REGIME_FAMILY.get(regime), k=6))
     prefix = (exp + "\n\n") if exp else ""
     return (prefix + "Numeric sidecar (exact levels, no-lookahead):\n```json\n"
             + json.dumps(sidecar, ensure_ascii=False) + "\n```\n\n"
@@ -402,8 +464,13 @@ def decide(sidecar: dict, image_path: str | Path | None = None, *,
     cfg = cfg or AgentConfig()
     image_bytes = (Path(image_path).read_bytes()
                    if cfg.vision and image_path is not None else None)
-    system = _system(cfg.vision)
-    user = _user_text(sidecar)
+    try:  # stage 1 of diagnose->route: free deterministic regime classifier
+        from pab.features import classify_regime
+        regime = classify_regime(sidecar)
+    except Exception:  # noqa: BLE001 — partial sidecars (tools/tests) -> full KB
+        regime = None
+    system = _system(cfg.vision, regime)
+    user = _user_text(sidecar, regime)
 
     cache_file = None
     if cfg.cache:
