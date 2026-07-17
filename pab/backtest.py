@@ -52,6 +52,10 @@ class Config:
     window_end: str = "11:25"         # last ENTRY bar (signals come from 09:30-11:30 only)
     flat_by: str = "15:55"            # open trades may run past the window to their stop/
                                       # target; force-flat at this bar's close (no overnight)
+    decision_latency_s: float = 0.0   # live parity: seconds after the signal bar closes
+                                      # before the order is WORKING (LLM think time + order
+                                      # placement). Rounded UP to whole minutes; needs m1
+                                      # (without m1 it degrades to 0 = instant, as before)
 
 
 @dataclass
@@ -166,18 +170,36 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
         j = i + 1
         nxt = win.iloc[j]
         mins_j = _minutes_of(m1, win.index[j])
-        fill_from = 0            # minute row in bar j from which exits may trigger
+        # live parity: the order only becomes WORKING lat_min minutes into bar j
+        # (decision latency, ceil to minutes); needs m1 for sub-bar activation
+        lat_min = 0
+        if cfg.decision_latency_s > 0 and mins_j is not None:
+            lat_min = int(-(-cfg.decision_latency_s // 60))
+        fill_from = lat_min      # minute row in bar j from which fills/exits may trigger
         if use_stop_entry:
-            n_open = float(nxt["open"])
-            gapped = (n_open >= entry_ref) if sig.side == "long" else (n_open <= entry_ref)
-            triggered = ((float(nxt["high"]) >= entry_ref) if sig.side == "long"
-                         else (float(nxt["low"]) <= entry_ref))
+            if lat_min > 0 and mins_j is not None and lat_min >= len(mins_j):
+                _bump(stats, "no_fill")   # decision arrived after bar j ended -> canceled
+                i = j
+                continue
+            if lat_min > 0 and mins_j is not None:
+                act = mins_j.iloc[lat_min:]              # minutes the order is live for
+                a_open = float(act.iloc[0]["open"])
+                gapped = ((a_open >= entry_ref) if sig.side == "long"
+                          else (a_open <= entry_ref))
+                triggered = ((float(act["high"].max()) >= entry_ref) if sig.side == "long"
+                             else (float(act["low"].min()) <= entry_ref))
+            else:
+                a_open = float(nxt["open"])
+                gapped = ((a_open >= entry_ref) if sig.side == "long"
+                          else (a_open <= entry_ref))
+                triggered = ((float(nxt["high"]) >= entry_ref) if sig.side == "long"
+                             else (float(nxt["low"]) <= entry_ref))
             if gapped:
-                entry = n_open + slip if sig.side == "long" else n_open - slip
+                entry = a_open + slip if sig.side == "long" else a_open - slip
             elif triggered:
                 entry = entry_ref + slip if sig.side == "long" else entry_ref - slip
                 if mins_j is not None:  # locate the trigger minute: exits can't precede the fill
-                    for mi in range(len(mins_j)):
+                    for mi in range(lat_min, len(mins_j)):
                         mrow = mins_j.iloc[mi]
                         hit_trig = ((float(mrow["high"]) >= entry_ref) if sig.side == "long"
                                     else (float(mrow["low"]) <= entry_ref))
@@ -189,7 +211,13 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
                 i = j
                 continue
         else:
-            raw = float(nxt["open"])
+            if lat_min > 0 and mins_j is not None:
+                mi0 = min(lat_min, len(mins_j) - 1)
+                raw = (float(mins_j.iloc[mi0]["open"]) if lat_min < len(mins_j)
+                       else float(nxt["close"]))       # decided after bar j: ~bar close
+                fill_from = mi0
+            else:
+                raw = float(nxt["open"])
             entry = raw + slip if sig.side == "long" else raw - slip
 
         # ---- exit scan: past the entry window if needed, minute-resolution when m1 given ----

@@ -208,6 +208,38 @@ def test_gate_blocks_late_and_doji_bars():
                                 close=109.0)) is None           # near session high: ask LLM
 
 
+# ---------- decision latency (live parity) ----------
+
+def test_latency_misses_early_trigger():
+    # Stop trigger (101.25) is touched ONLY in minute 0 of the fill bar; with 60s
+    # decision latency the order isn't working yet -> no fill. Instant -> fills.
+    cont = mk5([(100, 101, 99, 100.5), (100, 101.5, 99.8, 100),
+                (100, 100.8, 99.5, 100.2)])
+    m1 = mk1("09:35", [(100, 101.5, 99.9, 100.1),      # minute 0: only touch of 101.25
+                       (100.1, 100.9, 99.9, 100.2), (100.2, 100.8, 100, 100.4),
+                       (100.4, 100.9, 99.8, 100), (100, 100.6, 99.8, 100)])
+    sig = Signal("long", stop=96.0, target=106.5, entry_type="stop")
+    instant = run_session(cont, SESSION, fire_at(1, sig), m1=m1)
+    assert len(instant) == 1 and instant[0].entry == 101.5
+    stats = {}
+    late = run_session(cont, SESSION, fire_at(1, sig),
+                       Config(decision_latency_s=60), m1=m1, stats=stats)
+    assert late == [] and stats["no_fill"] == 1
+
+
+def test_latency_market_fills_at_activation_minute():
+    cont = mk5([(100, 101, 99, 100.5), (100, 102, 99.8, 101.5),
+                (101.5, 111, 101, 110.6)])
+    m1 = mk1("09:35", [(100, 100.5, 99.8, 100.2), (100.9, 101.2, 100.7, 101),
+                       (101, 101.5, 100.8, 101.2), (101.2, 101.8, 101, 101.5),
+                       (101.5, 102, 101.3, 101.5)])
+    sig = Signal("long", stop=95.5, target=110.5, entry_type="market")
+    lat = run_session(cont, SESSION, fire_at(1, sig),
+                      Config(decision_latency_s=60), m1=m1)
+    assert len(lat) == 1
+    assert lat[0].entry == 101.15     # minute-1 open 100.9 + slip, not bar open 100
+
+
 # ---------- diagnose -> route + magnets ----------
 
 def test_classify_regime():

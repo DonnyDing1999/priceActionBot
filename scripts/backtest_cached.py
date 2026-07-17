@@ -17,6 +17,9 @@ Experiment knobs:
                  no-fill filter can't apply, and day-level halt sequences differ.
   PA_MIN_RR=x  — relax the R:R floor for such experiments (inverted trades have
                  RR<1 by construction and would otherwise all be vetoed).
+  PA_LATENCY=s — decision latency in seconds (live parity): orders only become
+                 working ceil(s/60) minutes into the fill bar. Quantifies what a
+                 slow model costs on the SAME cached decisions.
 """
 import json
 import os
@@ -72,7 +75,8 @@ def main() -> None:
     sessions = complete_sessions(cont)[-int(os.getenv("N_SESSIONS", "128")):]
 
     strat = CacheOnlyStrategy(cfg)
-    ecfg = Config(min_rr=float(os.getenv("PA_MIN_RR", "1.0")))
+    ecfg = Config(min_rr=float(os.getenv("PA_MIN_RR", "1.0")),
+                  decision_latency_s=float(os.getenv("PA_LATENCY", "0")))
     stats: dict = {}
     trades = []
     per_session_hits: dict[str, int] = {}
