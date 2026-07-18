@@ -51,8 +51,10 @@ except Exception:
 
 # numeric path is text-only -> zhipu default is a capable TEXT model (glm-4.5-flash),
 # not the slower vision model. Override per run with PA_MODEL.
+# claude_cli = the local `claude -p` headless CLI (user's Claude Code subscription,
+# official print mode — no API key). Local strong-model test channel.
 _DEFAULT_MODEL = {"anthropic": "claude-opus-4-8", "gemini": "gemini-2.5-flash",
-                  "zhipu": "glm-4.5-flash"}
+                  "zhipu": "glm-4.5-flash", "claude_cli": "claude-opus-4-8"}
 
 
 # --- decision shape (Pydantic for Gemini response_schema; dict below for Anthropic) ---
@@ -109,6 +111,10 @@ def key_status(cfg: Optional[AgentConfig] = None) -> dict:
     elif cfg.provider == "gemini":
         ok = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
         hint = "GEMINI_API_KEY  (free key: https://aistudio.google.com)"
+    elif cfg.provider == "claude_cli":
+        import shutil
+        ok = shutil.which("claude") is not None
+        hint = "the `claude` CLI on PATH, logged in (official headless -p mode)"
     else:
         ok = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"))
         hint = "ANTHROPIC_API_KEY  (https://console.anthropic.com)"
@@ -452,6 +458,42 @@ def _decide_zhipu(system: str, image_bytes: Optional[bytes], user: str,
     return out
 
 
+def _decide_claude_cli(system: str, image_bytes: Optional[bytes], user: str,
+                       cfg: AgentConfig) -> dict:
+    """Local `claude -p` headless call (user's Claude Code login — official print
+    mode, no API key). Numeric path only (no image). Notes: temperature is not
+    controllable through the CLI, and the prompt rides on top of Claude Code's own
+    system prompt (--append-system-prompt) — a strong-model TEST channel, not the
+    airtight primary eval transport."""
+    import subprocess
+    prompt = user + "\n\n" + _JSON_KEYS_HINT
+    cmd = ["claude", "--model", cfg.resolved_model(), "-p",
+           "--output-format", "json", "--max-turns", "1",
+           "--append-system-prompt", system]
+    last: Exception | None = None
+    for _ in range(2):                        # one retry on malformed output
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                           timeout=300)
+        if r.returncode != 0:
+            last = RuntimeError(f"claude -p exit {r.returncode}: {r.stderr[:160]}")
+            continue
+        try:
+            wrap = json.loads(r.stdout)
+            out = _loads_lenient(wrap.get("result", ""))
+            out["_usage"] = {"provider": "claude_cli", "model": cfg.resolved_model(),
+                             "input": (wrap.get("usage") or {}).get("input_tokens", 0),
+                             "cache_read": (wrap.get("usage") or {}).get(
+                                 "cache_read_input_tokens", 0),
+                             "cache_write": 0,
+                             "output": (wrap.get("usage") or {}).get("output_tokens", 0),
+                             "cost_usd": wrap.get("total_cost_usd")}
+            return out
+        except Exception as e:  # noqa: BLE001
+            last = e
+            continue
+    raise last if last else RuntimeError("claude -p failed")
+
+
 CACHE_DIR = ROOT / "data" / "cache" / "decisions"
 
 
@@ -500,6 +542,8 @@ def decide(sidecar: dict, image_path: str | Path | None = None, *,
         out = _decide_gemini(system, image_bytes, user, cfg)
     elif cfg.provider == "zhipu":
         out = _decide_zhipu(system, image_bytes, user, cfg)
+    elif cfg.provider == "claude_cli":
+        out = _decide_claude_cli(system, image_bytes, user, cfg)
     else:
         out = _decide_anthropic(system, image_bytes, user, cfg)
 
