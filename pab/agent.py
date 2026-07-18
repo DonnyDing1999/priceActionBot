@@ -133,8 +133,11 @@ the Always-In direction, spot pullbacks to the EMA, and locate the CURRENT (last
 in that structure. Pre-computed helpers: `swings` lists the confirmed pivot points with \
 structure labels (HH/HL = uptrend skeleton, LH/LL = downtrend skeleton); \
 `last_bars_pattern` flags ii/inside/outside combos on the latest bars; `chop` quantifies \
-the session's texture — HIGH overlap + LOW efficiency + many small bodies = a trading \
-range where breakouts fail: in that texture, default to no_trade and never stop-enter. \
+the session's texture. Read `chop` TOGETHER with always_in: when always_in is NEUTRAL and \
+overlap is high / efficiency low / bodies small, it is a two-sided trading range — default \
+to no_trade and never stop-enter at its extremes. But when always_in has been clearly one \
+side for several bars, texture alone is NOT a veto: trend days often grind with overlapping \
+bars, and the with-trend pullback entry is still your trade. \
 `magnets` lists the key magnet LEVELS — yesterday's high/low/close and the overnight \
 high/low — each with its signed distance from the current close (positive = above). The \
 numbers ARE your chart."""
@@ -163,8 +166,20 @@ range, or heading straight into a magnet closer than your first target — those
 and you buy the top / sell the bottom of the leg. CHECK the `magnets` list (yday high/low/ \
 close, overnight high/low, plus the session high/low and EMA): if one sits between your \
 entry and your target, either target the near side of it or pass.
+- RANGE FADES (double top/bottom, TR fade): enter NEAR the extreme you are fading — short \
+close to the high on the lower second top, buy close to the low — with the stop ONE TICK \
+beyond the FARTHER of the two extremes (above the higher of two tops, below the lower of \
+two bottoms), NEVER between them (a stop wedged between the tops gets tagged on any retest \
+of the true high). And never express a range fade as a stop entry through the OPPOSITE \
+side of the range: breaking the range low to "confirm" a double top is a breakout bet on \
+the ~80%-fail side.
 - DEFAULT to second entries (H2/L2). A first entry (H1/L1) is acceptable ONLY in a strong \
 spike or tight always-in trend with consecutive trend bars.
+- TREND-DAY PARTICIPATION: when always_in has been one-sided for several bars, your job \
+flips from finding objections to finding THE entry — a pullback holding at/near the rising \
+(falling) EMA followed by a with-trend signal bar IS the H2/L2. On such a day aim to take \
+exactly ONE good with-trend entry rather than zero; skipping every bar of a trend day is a \
+process error, not caution.
 
 HARD RULES (a separate code risk-layer also enforces these; a proposal that violates them is \
 discarded, wasting the call):
