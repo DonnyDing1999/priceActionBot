@@ -63,11 +63,13 @@ def _build_user(journal: dict) -> str:
 def _chat_text(system: str, user: str, cfg: AgentConfig) -> str:
     if cfg.provider == "claude_cli":  # local `claude -p` (official headless mode)
         import subprocess
+        clean_env = {k: os.environ[k] for k in ("HOME", "PATH", "USER", "TERM", "SHELL")
+                     if k in os.environ}
         r = subprocess.run(
             ["claude", "--model", cfg.resolved_model(), "-p",
              "--output-format", "json", "--max-turns", "1",
              "--append-system-prompt", system + "\nReturn ONLY the JSON object."],
-            input=user, capture_output=True, text=True, timeout=300)
+            input=user, capture_output=True, text=True, timeout=300, env=clean_env)
         if r.returncode != 0:
             raise RuntimeError(f"claude -p exit {r.returncode}: {r.stderr[:160]}")
         import json as _json

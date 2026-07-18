@@ -470,10 +470,14 @@ def _decide_claude_cli(system: str, image_bytes: Optional[bytes], user: str,
     cmd = ["claude", "--model", cfg.resolved_model(), "-p",
            "--output-format", "json", "--max-turns", "1",
            "--append-system-prompt", system]
+    # clean env: a parent Claude Code session leaks ANTHROPIC_BASE_URL / CLAUDE_*
+    # vars that break the child CLI's own auth resolution
+    clean_env = {k: os.environ[k] for k in ("HOME", "PATH", "USER", "TERM", "SHELL")
+                 if k in os.environ}
     last: Exception | None = None
     for _ in range(2):                        # one retry on malformed output
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                           timeout=300)
+                           timeout=300, env=clean_env)
         if r.returncode != 0:
             last = RuntimeError(f"claude -p exit {r.returncode}: {r.stderr[:160]}")
             continue
