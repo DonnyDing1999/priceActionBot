@@ -337,6 +337,52 @@ def test_live_to_5m_closed_only():
     assert bars.iloc[0]["volume"] == 50                # 5 x 1m aggregated
 
 
+# ---------- v4: perception features, experience date filter, day gate ----------
+
+def test_sidecar_v4_features():
+    from pab.features import build_sidecar
+    # up-leg then pullback low then higher high -> swings + table + chop present
+    cont = mk5([(100, 101, 99.5, 100.8), (100.8, 102, 100.5, 101.8),
+                (101.8, 103, 101.5, 102.8), (102.8, 103.2, 101.0, 101.4),
+                (101.4, 102.0, 100.8, 101.8), (101.8, 104, 101.6, 103.8)])
+    sc = build_sidecar(cont, cont.index[-1])
+    assert "session_table" in sc and "recent_bars" not in sc and "session_bars" not in sc
+    lines = sc["session_table"].splitlines()
+    assert lines[0].startswith("i|time|") and len(lines) == 7   # header + 6 bars
+    assert lines[1].startswith("1|09:30|100|101|99.5|100.8|")
+    assert sc["chop"] is not None and 0 <= sc["chop"]["overlap_session"] <= 1
+    assert sc["swings"] == ["SH@103.2(bar4)", "SL@100.8(bar5)"]  # confirmed 1-bar pivots
+
+
+def test_last_bars_pattern_inside_outside():
+    from pab.features import build_sidecar
+    inside = mk5([(100, 103, 99, 102), (102, 102.5, 100.5, 101)])
+    assert build_sidecar(inside, inside.index[-1])["last_bars_pattern"] == "inside"
+    outside = mk5([(100, 101, 99.5, 100.5), (100.5, 102, 99, 101.5)])
+    assert build_sidecar(outside, outside.index[-1])["last_bars_pattern"] == "outside"
+
+
+def test_read_cases_date_filter(tmp_path, monkeypatch):
+    import pab.experience as ex
+    f = tmp_path / "cases.jsonl"
+    f.write_text('{"session":"2026-03-01","regime":"spike","note":"a"}\n'
+                 '{"session":"2026-03-05","regime":"spike","note":"b"}\n', "utf-8")
+    monkeypatch.setattr(ex, "CASES", f)
+    assert len(ex.read_cases(k=9)) == 2
+    got = ex.read_cases(k=9, before="2026-03-05")
+    assert len(got) == 1 and got[0]["note"] == "a"    # same-or-later lessons excluded
+    assert ex.read_cases(k=9, before="2026-03-01") == []
+
+
+def test_dayfilter_grades():
+    from pab.dayfilter import grade
+    assert grade(None) == "A"                          # no data -> no filter
+    chop = {"overlap": 0.70, "efficiency": 0.10, "small_body": 0.5, "range_vs_adr": 1.0}
+    trend = {"overlap": 0.40, "efficiency": 0.80, "small_body": 0.2, "range_vs_adr": 1.2}
+    assert grade(chop, "overlap") == "C" and grade(trend, "overlap") == "A"
+    assert grade(chop, "combo") == "C" and grade(trend, "combo") == "A"
+
+
 # ---------- capital metrics ----------
 
 def test_capital_metrics():

@@ -82,28 +82,68 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
         elif c < ema and not rising:
             ai = "ais"
 
-    recent_bars = [
-        {"t": ts.strftime("%H:%M"), "o": round(float(r.open), 2),
-         "h": round(float(r.high), 2), "l": round(float(r.low), 2),
-         "c": round(float(r.close), 2), "v": int(r.volume)}
-        for ts, r in recent.iterrows()
-    ]
-
     sess_hi = float(session["high"].max()) if len(session) else h
     sess_lo = float(session["low"].min()) if len(session) else l
 
-    # full developing session, open -> now, with per-bar EMA — the numeric "chart"
-    # the model reads bar-by-bar (replaces the rendered image in the no-vision path).
+    # full developing session, open -> now, as a compact pipe table — the numeric
+    # "chart" the model reads bar-by-bar (~60% fewer tokens than the old JSON list).
     ecol = session[ema_col]
-    session_bars = [
-        {"i": k + 1, "t": ts.strftime("%H:%M"),
-         "o": round(float(r.open), 2), "h": round(float(r.high), 2),
-         "l": round(float(r.low), 2), "c": round(float(r.close), 2),
-         "type": _bar_type(float(r.open), float(r.high), float(r.low), float(r.close)),
-         "cp": round((float(r.close) - float(r.low)) / ((float(r.high) - float(r.low)) or TICK), 2),
-         "e": round(float(ecol.iloc[k]), 2)}
-        for k, (ts, r) in enumerate(session.iterrows())
-    ]
+    rows = ["i|time|open|high|low|close|type|cp|ema"]
+    so, sh, sl, sc = (session["open"].to_numpy(), session["high"].to_numpy(),
+                      session["low"].to_numpy(), session["close"].to_numpy())
+    for k, ts in enumerate(session.index):
+        bt = _bar_type(float(so[k]), float(sh[k]), float(sl[k]), float(sc[k]))
+        cp = (float(sc[k]) - float(sl[k])) / ((float(sh[k]) - float(sl[k])) or TICK)
+        rows.append(f"{k+1}|{ts.strftime('%H:%M')}|{so[k]:g}|{sh[k]:g}|{sl[k]:g}"
+                    f"|{sc[k]:g}|{bt}|{cp:.2f}|{float(ecol.iloc[k]):.2f}")
+    session_table = "\n".join(rows)
+
+    # session texture — the "is this a chop day" numbers (overlap ~ barbwire)
+    n_s = len(session)
+    if n_s >= 2:
+        ovs = []
+        for k in range(1, n_s):
+            inter = min(sh[k], sh[k-1]) - max(sl[k], sl[k-1])
+            avg_rng = ((sh[k]-sl[k]) + (sh[k-1]-sl[k-1])) / 2 or TICK
+            ovs.append(max(0.0, float(inter)) / float(avg_rng))
+        overlap_sess = sum(ovs) / len(ovs)
+        overlap_5 = sum(ovs[-5:]) / len(ovs[-5:])
+        bodies = abs(sc - so)
+        small_share = float((bodies < 0.3 * (sh - sl + 1e-9)).mean())
+        eff = abs(float(sc[-1] - so[0])) / ((sess_hi - sess_lo) or TICK)
+        chop = {"overlap_session": round(overlap_sess, 2),
+                "overlap_last5": round(overlap_5, 2),
+                "efficiency": round(eff, 2),
+                "small_body_share": round(small_share, 2)}
+    else:
+        chop = None
+
+    # confirmed 1-bar swing pivots -> market structure labels (HH/HL/LH/LL).
+    # The last bar can never be a confirmed pivot (needs a right neighbor) — causal.
+    swings = []
+    last_sh = last_sl = None
+    for k in range(1, n_s - 1):
+        if sh[k] > sh[k-1] and sh[k] > sh[k+1]:
+            lab = "HH" if (last_sh is not None and sh[k] > last_sh) else \
+                  ("LH" if last_sh is not None else "SH")
+            last_sh = float(sh[k])
+            swings.append(f"{lab}@{sh[k]:g}(bar{k+1})")
+        if sl[k] < sl[k-1] and sl[k] < sl[k+1]:
+            lab = "HL" if (last_sl is not None and sl[k] > last_sl) else \
+                  ("LL" if last_sl is not None else "SL")
+            last_sl = float(sl[k])
+            swings.append(f"{lab}@{sl[k]:g}(bar{k+1})")
+    swings = swings[-6:]
+
+    # 2-3 bar combos on the most recent bars (Brooks: ii / inside / outside)
+    pattern = ""
+    if n_s >= 3 and sh[-1] <= sh[-2] and sl[-1] >= sl[-2] \
+            and sh[-2] <= sh[-3] and sl[-2] >= sl[-3]:
+        pattern = "ii"
+    elif n_s >= 2 and sh[-1] <= sh[-2] and sl[-1] >= sl[-2]:
+        pattern = "inside"
+    elif n_s >= 2 and sh[-1] >= sh[-2] and sl[-1] <= sl[-2]:
+        pattern = "outside"
 
     return {
         "symbol": symbol,
@@ -126,8 +166,10 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
         "pts_above_session_low": round(c - sess_lo, 2),
         "always_in_hint": ai,
         "magnets": magnets,
-        "session_bars": session_bars,
-        "recent_bars": recent_bars,
+        "chop": chop,
+        "swings": swings,
+        "last_bars_pattern": pattern,
+        "session_table": session_table,
         "config": ({"tick": TICK, "point_value_usd": POINT_VALUE_MES,
                     "per_trade_risk_usd": PER_TRADE_RISK_USD,
                     "per_trade_risk_pts": round(PER_TRADE_RISK_USD / POINT_VALUE_MES, 2)}

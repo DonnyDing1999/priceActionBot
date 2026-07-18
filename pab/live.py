@@ -27,6 +27,7 @@ import pandas as pd
 
 from pab.agent import AgentConfig, decide
 from pab.bars import ET
+from pab.dayfilter import day_features, grade
 from pab.features import build_sidecar, classify_regime  # noqa: F401 (regime via decide)
 from pab.instruments import get_spec
 from pab.journal import Journal
@@ -269,6 +270,13 @@ class LiveTrader:
         m1 = fetch_1m(self.data, self.spec.symbol, warmup_start)
         self._log("warmup", {"m1_bars": len(m1)})
 
+        # day-level chop gate from yesterday's texture (PA_DAYFILTER=off to disable)
+        dayfilter = os.getenv("PA_DAYFILTER", "overlap")
+        day_grade = "A"
+        if dayfilter != "off" and len(m1):
+            day_grade = grade(day_features(to_5m(m1), self.session), dayfilter)
+        self._log("day grade", {"grade": day_grade, "variant": dayfilter})
+
         while True:
             if KILL_FILE.exists():
                 self._log("KILL file present -> flatten + exit", {})
@@ -309,7 +317,7 @@ class LiveTrader:
             in_window = WINDOW_FIRST <= last.strftime("%H:%M") <= WINDOW_LAST
             if self.pending is not None and last > self.pending["bar_ts"]:
                 self.cancel_pending()                  # one-bar working rule
-            if (in_window and str(last.date()) == self.session
+            if (day_grade == "A" and in_window and str(last.date()) == self.session
                     and not self.in_position and self.pending is None):
                 self.decide_bar(cont5, last)
 

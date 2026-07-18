@@ -29,12 +29,17 @@ def add_cases(cases: list[dict], session: str) -> int:
     return n
 
 
-def read_cases(regime: str | tuple[str, ...] | None = None, k: int = 5) -> list[dict]:
+def read_cases(regime: str | tuple[str, ...] | None = None, k: int = 5,
+               before: str | None = None) -> list[dict]:
     """Most-recent k cases, preferring regime matches. `regime` may be one regime or a
-    tuple (a coarse family, e.g. all trend-like regimes); falls back to recent-any."""
+    tuple (a coarse family); falls back to recent-any. `before` (YYYY-MM-DD) keeps the
+    walk-forward honest: only lessons from sessions STRICTLY BEFORE that date are
+    eligible — a lesson may describe its own day, never a later one."""
     if not CASES.exists():
         return []
     rows = [json.loads(x) for x in CASES.read_text("utf-8").splitlines() if x.strip()]
+    if before:
+        rows = [r for r in rows if r.get("session", "") < before]
     if regime:
         want = (regime,) if isinstance(regime, str) else tuple(regime)
         matched = [r for r in rows if r.get("regime") in want]

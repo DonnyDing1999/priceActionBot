@@ -119,15 +119,19 @@ def key_status(cfg: Optional[AgentConfig] = None) -> dict:
 # byte-identical to the historical prompt so existing decision-cache keys survive
 
 _PERCEPTION_NUMERIC = """You are given a numeric sidecar for the CURRENT bar (no image). \
-`session_bars` is the FULL developing session from the 09:30 open to now — each entry has its \
-index from the open (i), time (t), OHLC (o/h/l/c), bar type, close position in its range \
-(cp, 0=low 1=high), and the 20-EMA value at that bar (e). READ THIS SEQUENCE BAR-BY-BAR the \
-way Al Brooks reads a chart: count the swings (H1/H2/L1/L2), identify spikes/channels/ \
-trading-ranges, track the Always-In direction, spot pullbacks to the EMA, and locate the \
-CURRENT (last) bar in that structure. `magnets` lists the key magnet LEVELS — yesterday's \
-high/low/close and the overnight high/low — each with its signed distance from the current \
-close (positive = above). The other sidecar fields give exact levels for stops/targets \
-("numbers for the price"). The numbers ARE your chart."""
+`session_table` is the FULL developing session from the 09:30 open to now, one row per bar: \
+i|time|open|high|low|close|type|cp|ema  (cp = close position in the bar's range, 0=low \
+1=high; ema = the 20-EMA at that bar). READ THIS TABLE BAR-BY-BAR the way Al Brooks reads \
+a chart: count the swings (H1/H2/L1/L2), identify spikes/channels/trading-ranges, track \
+the Always-In direction, spot pullbacks to the EMA, and locate the CURRENT (last row) bar \
+in that structure. Pre-computed helpers: `swings` lists the confirmed pivot points with \
+structure labels (HH/HL = uptrend skeleton, LH/LL = downtrend skeleton); \
+`last_bars_pattern` flags ii/inside/outside combos on the latest bars; `chop` quantifies \
+the session's texture — HIGH overlap + LOW efficiency + many small bodies = a trading \
+range where breakouts fail: in that texture, default to no_trade and never stop-enter. \
+`magnets` lists the key magnet LEVELS — yesterday's high/low/close and the overnight \
+high/low — each with its signed distance from the current close (positive = above). The \
+numbers ARE your chart."""
 
 _PERCEPTION_VISION = """You are given, for the CURRENT bar: (1) a rendered 5-minute \
 candlestick chart with a 20-EMA, the prior-day close line, an open marker, and bar numbers \
@@ -172,6 +176,11 @@ discarded, wasting the call):
   (the code gate enforces this cutoff). An OPEN position is different: it keeps working to \
   its stop or target through the afternoon and is only force-closed at the 16:00 session \
   close, so you are never squeezed out by the clock at 11:30.
+- SELF-CHECK before returning any trade (a failed check wastes the whole call): compute \
+  your trigger price (this bar's extreme +/- 1 tick for a stop entry, ~the close for \
+  market), then verify ALL of: (a) long -> stop < trigger < target, short -> \
+  target < trigger < stop; (b) risk = |trigger - stop| is between 2 and 15 points; \
+  (c) |target - trigger| >= risk. If any check fails, FIX the numbers or return no_trade.
 
 Output your decision in the required JSON shape. For no_trade, set stop and target to null. \
 For a trade, set stop and target as exact PRICES derived from the sidecar levels, keep risk \
@@ -268,7 +277,8 @@ _REGIME_FAMILY = {
 
 def _user_text(sidecar: dict, regime: Optional[str] = None) -> str:
     from pab.experience import as_prompt_block, read_cases  # closed loop: reviewed lessons
-    exp = as_prompt_block(read_cases(regime=_REGIME_FAMILY.get(regime), k=6))
+    exp = as_prompt_block(read_cases(regime=_REGIME_FAMILY.get(regime), k=6,
+                                     before=sidecar.get("session_date")))
     prefix = (exp + "\n\n") if exp else ""
     return (prefix + "Numeric sidecar (exact levels, no-lookahead):\n```json\n"
             + json.dumps(sidecar, ensure_ascii=False) + "\n```\n\n"

@@ -55,3 +55,5 @@
 {"session": "2026-02-17", "regime": "channel", "outcome": "success", "setup": "channel_pullback_h2", "note": "Strong bull trend bar closing near high at critical 90-minute mark with always-in long bias performed well"}
 {"session": "2026-02-18", "regime": "spike", "outcome": "success", "setup": "spike_and_channel", "note": "In a strong uptrend, spike continuation setups can be effective with good risk management"}
 {"session": "2026-02-18", "regime": "channel", "outcome": "failure", "setup": "channel_pullback_h1h2", "note": "Even in an always-in-long market, pullback setups can fail if the pullback is too shallow or momentum shifts"}
+{"session": "2026-02-19", "regime": "normal_channel", "outcome": "failure", "setup": "channel_pullback_h2", "note": "Pullback setups can fail if the underlying trend weakens; consider additional confirmation"}
+{"session": "2026-02-19", "regime": "trading_range", "outcome": "failure", "setup": "trading_range_fade", "note": "Range fades may need stronger momentum confirmation at extremes"}

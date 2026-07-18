@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pab.agent import AgentConfig, key_status  # noqa: E402 (loads .env)
 from pab.backtest import Config, run_session, summarize  # noqa: E402
 from pab.bars import complete_sessions, load_bars  # noqa: E402
+from pab.dayfilter import day_features, grade  # noqa: E402
 from pab.journal import Journal  # noqa: E402
 from pab.llm_strategy import LLMStrategy  # noqa: E402
 
@@ -41,6 +42,7 @@ def main() -> None:
 
     n = int(os.getenv("N_SESSIONS", "3"))
     workers = int(os.getenv("PA_WORKERS", "3"))
+    dayfilter = os.getenv("PA_DAYFILTER", "overlap")   # off | overlap | efficiency | combo
     cfg = AgentConfig()
 
     cont = load_bars(RAW)
@@ -49,10 +51,15 @@ def main() -> None:
 
     print(f"LLM backtest — provider={cfg.provider} model={cfg.resolved_model()} "
           f"temp={cfg.temperature} cache={'on' if cfg.cache else 'off'} "
-          f"m1={'on' if m1 is not None else 'off'} workers={workers}")
+          f"m1={'on' if m1 is not None else 'off'} workers={workers} "
+          f"dayfilter={dayfilter}")
     print(f"{len(sessions)} sessions {sessions}\n", flush=True)
 
     def run_one(s: str):
+        # day-level chop gate: a C-graded day is skipped entirely (no LLM calls) —
+        # Brooks' 'most days are not worth trading', validated by replay experiment
+        if dayfilter != "off" and grade(day_features(cont, s), dayfilter) == "C":
+            return s, [], None, {"day_grade": "C"}
         strat = LLMStrategy(cont, cfg=cfg)   # one instance per session (own state)
         stats: dict = {}
         trades = run_session(cont, s, strat, Config(), m1=m1, stats=stats)
@@ -70,6 +77,13 @@ def main() -> None:
             except Exception as e:  # noqa: BLE001 — a whole-session failure
                 print(f"[{s}] ERROR: {type(e).__name__}: {str(e)[:160]} — skipping",
                       flush=True)
+                continue
+            if strat is None:            # C-graded day: journal the skip, zero trades
+                journal.record_decision(s, 0, "09:30",
+                                        {"action": "no_trade",
+                                         "reason": f"day_gate: C ({dayfilter})"})
+                journal.save()
+                print(f"[{s}] C-DAY skipped (day gate)", flush=True)
                 continue
             all_trades.extend(trades)
             err_total += strat.errors
