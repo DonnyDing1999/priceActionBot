@@ -47,7 +47,13 @@ def main() -> None:
 
     cont = load_bars(RAW)
     m1 = load_bars(RAW_1M) if RAW_1M.exists() else None
-    sessions = complete_sessions(cont)[-n:]
+    all_sessions = complete_sessions(cont)
+    sl = os.getenv("PA_SLICE")           # e.g. "0:20" = first 20 sessions; overrides N_SESSIONS
+    if sl:
+        a, _, b = sl.partition(":")
+        sessions = all_sessions[int(a or 0):(int(b) if b else None)]
+    else:
+        sessions = all_sessions[-n:]
 
     print(f"LLM backtest — provider={cfg.provider} model={cfg.resolved_model()} "
           f"temp={cfg.temperature} cache={'on' if cfg.cache else 'off'} "
