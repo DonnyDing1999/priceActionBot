@@ -20,6 +20,7 @@ Experiment knobs:
   PA_LATENCY=s — decision latency in seconds (live parity): orders only become
                  working ceil(s/60) minutes into the fill bar. Quantifies what a
                  slow model costs on the SAME cached decisions.
+  PA_MAGNET_VETO=0 — disables the first-obstacle R:R veto for A/B replays.
 """
 import json
 import os
@@ -43,7 +44,6 @@ class CacheOnlyStrategy:
 
     def __init__(self, cfg: AgentConfig):
         self.cfg = cfg
-        self.system = _system(cfg.vision)
         self.hits = 0
         self.misses = 0
         self.gated = 0
@@ -52,7 +52,14 @@ class CacheOnlyStrategy:
         if obvious_no_trade(sidecar):          # same gate as the live run
             self.gated += 1
             return None
-        key = _cache_key(self.cfg, self.system, _user_text(sidecar), None)
+        # mirror decide()'s key construction exactly: regime-routed system + window
+        try:
+            from pab.features import classify_regime
+            regime = classify_regime(sidecar)
+        except Exception:  # noqa: BLE001
+            regime = None
+        system = _system(self.cfg.vision, regime, self.cfg.instrument, self.cfg.window)
+        key = _cache_key(self.cfg, system, _user_text(sidecar, regime), None)
         f = CACHE_DIR / f"{key}.json"
         if not f.exists():
             self.misses += 1                   # errored/unreached in live run -> no_trade
@@ -76,7 +83,8 @@ def main() -> None:
 
     strat = CacheOnlyStrategy(cfg)
     ecfg = Config(min_rr=float(os.getenv("PA_MIN_RR", "1.0")),
-                  decision_latency_s=float(os.getenv("PA_LATENCY", "0")))
+                  decision_latency_s=float(os.getenv("PA_LATENCY", "0")),
+                  magnet_veto=os.getenv("PA_MAGNET_VETO", "1") not in ("0", "false"))
     stats: dict = {}
     trades = []
     per_session_hits: dict[str, int] = {}

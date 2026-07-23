@@ -449,3 +449,54 @@ def test_veto_reasons_counted():
     assert trades == []
     assert stats["veto"] == {"geometry": 1}
     assert stats["signals"] == 1
+
+
+# ---------- magnet-distance veto ----------
+
+def test_magnet_veto_blocks_obstructed_reward():
+    rm = RiskManager(Config())
+    # long: printed RR 2.0 (100->110 on 5pt risk) but a magnet at 103 caps the
+    # reachable reward at 3pts (0.6R) before it -> veto
+    assert rm.validate_entry("long", 100.0, 95.0, 110.0,
+                             obstacles=[103.0]).reason == "rr_to_magnet"
+    # short mirror: 100->90 on 5pt risk, magnet at 97.5 caps reward at 2.5pts (0.5R)
+    assert rm.validate_entry("short", 100.0, 105.0, 90.0,
+                             obstacles=[97.5]).reason == "rr_to_magnet"
+
+
+def test_magnet_veto_allows_target_before_magnet():
+    rm = RiskManager(Config())
+    # target exactly AT the magnet (105 not strictly between 100 and 105) -> allowed
+    assert rm.validate_entry("long", 100.0, 95.0, 105.0, obstacles=[105.0]).ok
+    # magnet beyond the target (106 > 105) -> allowed
+    assert rm.validate_entry("long", 100.0, 95.0, 105.0, obstacles=[106.0]).ok
+
+
+def test_magnet_veto_off_or_no_obstacles():
+    # magnet_veto disabled -> the obstructed setup passes
+    rm = RiskManager(Config(magnet_veto=False))
+    assert rm.validate_entry("long", 100.0, 95.0, 110.0, obstacles=[103.0]).ok
+    # no obstacles supplied -> nothing to check
+    rm = RiskManager(Config())
+    assert rm.validate_entry("long", 100.0, 95.0, 110.0, obstacles=None).ok
+    assert rm.validate_entry("long", 100.0, 95.0, 110.0, obstacles=[]).ok
+
+
+def test_magnet_veto_engine_integration():
+    # 2-day cont (prior RTH + today); a market long fires at today's first bar with a
+    # 105 entry and a 120 target (printed RR 1.5). Yesterday's high, 108, is a magnet
+    # sitting between them -> reachable reward 3pts < 10pt risk -> first-obstacle veto.
+    d1 = pd.date_range("2026-07-02 09:30", periods=3, freq="5min", tz=ET)  # prior RTH
+    on = pd.date_range("2026-07-02 18:00", periods=2, freq="5min", tz=ET)  # overnight
+    d2 = pd.date_range(f"{SESSION} 09:30", periods=2, freq="5min", tz=ET)  # today
+    rows = [(100, 105, 99, 104), (104, 106, 103, 105), (105, 108, 103, 104),
+            (103, 104, 102, 103), (103, 104, 101, 102),   # overnight (below entry)
+            (104, 105, 103, 105), (105, 105.5, 104, 105)]  # today: signal bar closes 105
+    cont = pd.DataFrame(
+        [{"open": o, "high": h, "low": l, "close": c, "volume": 50}
+         for o, h, l, c in rows], index=d1.append(on).append(d2))
+    sig = Signal("long", stop=95.0, target=120.0, entry_type="market")
+    stats = {}
+    trades = run_session(cont, SESSION, fire_at(1, sig), stats=stats)
+    assert trades == []
+    assert stats["veto"] == {"rr_to_magnet": 1}

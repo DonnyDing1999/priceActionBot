@@ -41,7 +41,8 @@ class RiskManager:
             return True, "daily_loss_cap"
         return False, ""
 
-    def validate_entry(self, side: str, entry: float, stop, target) -> RiskDecision:
+    def validate_entry(self, side: str, entry: float, stop, target,
+                       obstacles: list[float] | None = None) -> RiskDecision:
         c = self.cfg
         if side not in ("long", "short"):
             return RiskDecision(False, "bad_side")
@@ -66,6 +67,19 @@ class RiskManager:
         # R:R floor on the (near) target — reject sub-min_rr proposals
         if abs(target - entry) / risk < c.min_rr:
             return RiskDecision(False, "rr_below_floor")
+        # first-obstacle R:R — a magnet strictly between entry and target caps the
+        # reachable reward at that level; veto if reward to the nearest one is sub-min_rr
+        magnet_veto = getattr(c, "magnet_veto", True)
+        if magnet_veto and obstacles:
+            if side == "long":
+                between = [px for px in obstacles if entry < px < target]
+            else:
+                between = [px for px in obstacles if target < px < entry]
+            if between:
+                eff_reward = ((min(between) - entry) if side == "long"
+                              else (entry - max(between)))
+                if eff_reward / risk < c.min_rr:
+                    return RiskDecision(False, "rr_to_magnet")
         return RiskDecision(True, "")
 
     def on_trade_closed(self, pnl_usd: float) -> None:

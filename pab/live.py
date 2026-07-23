@@ -244,7 +244,18 @@ class LiveTrader:
                    else bar["l"] - self.spec.tick)
         if sig.entry_type != "stop":     # market entries: trigger ~ current close
             trigger = bar["c"]
-        rd = self.rm.validate_entry(sig.side, trigger, sig.stop, sig.target)
+        # first-obstacle R:R veto: identical obstacle set to the backtest (magnets +
+        # session extremes; a session extreme the signal bar itself printed is not a
+        # forward obstacle, so it never counts against its own reward).
+        obstacles = [m["px"] for m in sidecar.get("magnets", [])]
+        own = sidecar.get("bar", {})
+        own_extreme = {"session_high": own.get("h"), "session_low": own.get("l")}
+        for k in ("session_high", "session_low", "ema20"):
+            v = sidecar.get(k)
+            if v is not None and v != own_extreme.get(k):
+                obstacles.append(float(v))
+        rd = self.rm.validate_entry(sig.side, trigger, sig.stop, sig.target,
+                                    obstacles=obstacles)
         if not rd.ok:
             self._log("veto", {"reason": rd.reason})
             return

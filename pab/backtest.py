@@ -46,6 +46,8 @@ class Config:
     min_risk_pts: float = 2.0         # reject micro-stops: commission+slippage (~0.8pt)
                                       # would dominate the R math below this
     min_rr: float = 1.0               # reward:risk floor on the near target
+    magnet_veto: bool = True          # veto if a magnet sits between entry and target
+                                      # capping the first-obstacle reward below min_rr
     max_trades: int = 3
     max_consec_loss: int = 2
     daily_loss_cap: float = 500.0
@@ -146,8 +148,8 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
         if rm.session_halted()[0]:     # circuit breakers: max trades / consec loss / daily loss
             break
         cur_ts = win.index[i]
-        sig = strategy(build_sidecar(cont, cur_ts, window_start=cfg.window_start),
-                       win.iloc[: i + 1])
+        sidecar = build_sidecar(cont, cur_ts, window_start=cfg.window_start)
+        sig = strategy(sidecar, win.iloc[: i + 1])
         if sig is None:
             i += 1
             continue
@@ -161,8 +163,19 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
         else:               # market / limit (approximated as market at next open)
             entry_ref = float(cur["close"])
 
-        # pre-trade veto: geometry + per-trade $ cap + R:R floor (LLM not trusted to self-enforce)
-        rd = rm.validate_entry(sig.side, entry_ref, sig.stop, sig.target)
+        # pre-trade veto: geometry + per-trade $ cap + R:R floor + first-obstacle R:R
+        # (LLM not trusted to self-enforce). Obstacles = magnet levels + session extremes;
+        # a session extreme the signal bar itself just printed is not a forward obstacle
+        # (the entry fills on the NEXT bar), so it never counts against its own reward.
+        obstacles = [m["px"] for m in sidecar.get("magnets", [])]
+        own = sidecar.get("bar", {})
+        own_extreme = {"session_high": own.get("h"), "session_low": own.get("l")}
+        for k in ("session_high", "session_low", "ema20"):
+            v = sidecar.get(k)
+            if v is not None and v != own_extreme.get(k):
+                obstacles.append(float(v))
+        rd = rm.validate_entry(sig.side, entry_ref, sig.stop, sig.target,
+                               obstacles=obstacles)
         if not rd.ok:
             _bump(stats, "veto", rd.reason)
             i += 1
