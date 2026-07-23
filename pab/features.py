@@ -25,10 +25,14 @@ def _bar_type(o: float, h: float, l: float, c: float) -> str:
 
 def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
                   symbol: str = "ES=F", ema_period: int = 20,
-                  recent_n: int = 6, spec=None) -> dict:
+                  recent_n: int = 6, spec=None,
+                  window_start: str = "09:30") -> dict:
     """Structured numeric context as of `current_ts` (inclusive), no future bars used.
     `spec` (pab.instruments.InstrumentSpec) overrides the risk-config block for
-    non-MES instruments; None keeps the historical MES values byte-identical."""
+    non-MES instruments; None keeps the historical MES values byte-identical.
+    `window_start` anchors the session view: for the afternoon window ("13:30") the
+    bar count/table start there and the morning is compressed into magnet levels —
+    the morning has already happened by then, so this is lookahead-safe."""
     hist = add_ema(cont[cont.index <= current_ts], ema_period)
     if hist.empty:
         raise ValueError("no bars at/before current_ts")
@@ -39,18 +43,20 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
     rng = (h - l) or TICK
 
     session_date = current_ts.date()
-    open_ts = pd.Timestamp(f"{session_date} 09:30", tz=ET)
+    open_ts = pd.Timestamp(f"{session_date} {window_start}", tz=ET)
+    rth_open_ts = pd.Timestamp(f"{session_date} 09:30", tz=ET)
     session = hist[hist.index >= open_ts]
     bar_index = int(len(session))
 
-    prior_close = prior_rth_close(cont, open_ts, str(session_date))
-    sess_open_px = float(session["open"].iloc[0]) if len(session) else o
+    prior_close = prior_rth_close(cont, rth_open_ts, str(session_date))
+    day_session = hist[hist.index >= rth_open_ts]
+    sess_open_px = float(day_session["open"].iloc[0]) if len(day_session) else o
     gap = round(sess_open_px - prior_close, 2) if prior_close is not None else None
 
-    # magnet levels (no-lookahead: strictly before today's open): prior day's RTH
+    # magnet levels (no-lookahead: strictly before today's RTH open): prior day's RTH
     # high/low and the overnight (post-16:00 -> pre-open) high/low. Brooks: price is
     # drawn to these; stop entries INTO a nearby magnet are low-quality.
-    before = cont[cont.index < open_ts]
+    before = cont[cont.index < rth_open_ts]
     magnets = []
     prior_dates = sorted({d for d in before.index.date if d < session_date})
     if prior_dates:
@@ -69,6 +75,17 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
                        ("overnight_low", float(overnight["low"].min()))]
         magnets = [{"name": nm, "px": round(px, 2), "pts_from_close": round(px - c, 2)}
                    for nm, px in levels]
+
+    # afternoon window: compress THIS morning (already history at window open) into
+    # magnet levels instead of carrying 48 bars of table — lookahead-safe by construction
+    if open_ts > rth_open_ts:
+        am = hist[(hist.index >= rth_open_ts) & (hist.index < open_ts)]
+        if len(am):
+            for nm, px in (("am_high", float(am["high"].max())),
+                           ("am_low", float(am["low"].min())),
+                           ("am_close", float(am["close"].iloc[-1]))):
+                magnets.append({"name": nm, "px": round(px, 2),
+                                "pts_from_close": round(px - c, 2)})
 
     ema = float(cur[ema_col])
     ema_prev = float(hist[ema_col].iloc[-4]) if len(hist) >= 4 else ema

@@ -383,6 +383,39 @@ def test_dayfilter_grades():
     assert grade(chop, "combo") == "C" and grade(trend, "combo") == "A"
 
 
+# ---------- afternoon window ----------
+
+def test_pm_sidecar_window_semantics():
+    from pab.features import build_sidecar
+    # morning bars 09:30.. + afternoon bars from 13:30
+    am_idx = pd.date_range(f"{SESSION} 09:30", periods=4, freq="5min", tz=ET)
+    pm_idx = pd.date_range(f"{SESSION} 13:30", periods=3, freq="5min", tz=ET)
+    rows = [(100, 105, 99, 104), (104, 106, 103, 105),
+            (105, 107, 104, 106), (106, 106.5, 105, 106),      # am: hi 107 lo 99
+            (106, 108, 105.5, 107), (107, 109, 106, 108), (108, 108.5, 107, 108)]
+    cont = pd.DataFrame([{"open": o, "high": h, "low": l, "close": c, "volume": 10}
+                         for o, h, l, c in rows], index=am_idx.append(pm_idx))
+    sc = build_sidecar(cont, pm_idx[-1], window_start="13:30")
+    assert sc["bar_index_from_open"] == 3                 # counted from 13:30
+    assert sc["session_table"].splitlines()[1].startswith("1|13:30|")
+    m = {x["name"]: x["px"] for x in sc["magnets"]}
+    assert m["am_high"] == 107 and m["am_low"] == 99 and m["am_close"] == 106
+    # am-window call on the same data has no am_* magnets and counts from 09:30
+    sc_am = build_sidecar(cont, am_idx[-1])
+    assert sc_am["bar_index_from_open"] == 4
+    assert not any(x["name"].startswith("am_") for x in sc_am["magnets"])
+
+
+def test_pm_system_prompt_variant():
+    from pab.agent import _system
+    am = _system(False, "trend", "mes", "am")
+    pm = _system(False, "trend", "mes", "pm")
+    assert "AFTERNOON WINDOW" in pm and "am_high" in pm
+    assert "AFTERNOON WINDOW" not in am and am != pm
+    # am text byte-stable regardless of the new window param default
+    assert am == _system(False, "trend", "mes")
+
+
 # ---------- capital metrics ----------
 
 def test_capital_metrics():

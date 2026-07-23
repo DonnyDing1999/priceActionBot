@@ -93,6 +93,8 @@ class AgentConfig:
         default_factory=lambda: os.getenv("PA_VISION", "0").lower() in ("1", "true", "yes"))
     instrument: str = field(
         default_factory=lambda: os.getenv("PA_INSTRUMENT", "mes"))
+    window: str = field(
+        default_factory=lambda: os.getenv("PA_WINDOW", "am"))   # am | pm session window
     temperature: float = field(
         default_factory=lambda: float(os.getenv("PA_TEMPERATURE", "0.1")))
     cache: bool = field(
@@ -275,15 +277,25 @@ def _kb_block(regime: Optional[str]) -> str:
     return "\n\n".join(parts)
 
 
+_PM_ADDENDUM = """TODAY YOU ARE TRADING THE AFTERNOON WINDOW: entries only 13:30-15:30 ET \
+(bar 1 = 13:30; the same bar-19 entry cutoff applies, = 15:00). The MORNING session already \
+happened — its high/low/close arrive as `magnets` (am_high / am_low / am_close) and act as \
+the day's dominant magnets: the afternoon usually either breaks out of the morning range \
+with follow-through or trades back inside it. Exits still force-flat at 15:55, so runway is \
+SHORT — prefer nearer targets (~1R) and be extra reluctant to enter after bar 15."""
+
+
 def _system(vision: bool = False, regime: Optional[str] = None,
-            instrument: str = "mes") -> str:
+            instrument: str = "mes", window: str = "am") -> str:
     from pab.instruments import get_spec
-    key = (vision, regime if _route_enabled() else None, instrument)
+    key = (vision, regime if _route_enabled() else None, instrument, window)
     if key not in _SYSTEM_CACHE:
         perception = _PERCEPTION_VISION if vision else _PERCEPTION_NUMERIC
-        _SYSTEM_CACHE[key] = ("\n\n".join([get_spec(instrument).role_text,
-                                           perception, SYSTEM_RULES])
-                              + _kb_block(key[1]))
+        parts = [get_spec(instrument).role_text]
+        if window == "pm":
+            parts.append(_PM_ADDENDUM)
+        parts += [perception, SYSTEM_RULES]
+        _SYSTEM_CACHE[key] = "\n\n".join(parts) + _kb_block(key[1])
     return _SYSTEM_CACHE[key]
 
 
@@ -543,7 +555,7 @@ def decide(sidecar: dict, image_path: str | Path | None = None, *,
         regime = classify_regime(sidecar)
     except Exception:  # noqa: BLE001 — partial sidecars (tools/tests) -> full KB
         regime = None
-    system = _system(cfg.vision, regime, cfg.instrument)
+    system = _system(cfg.vision, regime, cfg.instrument, cfg.window)
     user = _user_text(sidecar, regime)
 
     cache_file = None

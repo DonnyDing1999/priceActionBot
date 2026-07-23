@@ -49,7 +49,8 @@ class Config:
     max_trades: int = 3
     max_consec_loss: int = 2
     daily_loss_cap: float = 500.0
-    window_end: str = "11:25"         # last ENTRY bar (signals come from 09:30-11:30 only)
+    window_start: str = "09:30"       # first ENTRY-window bar (afternoon session: 13:30)
+    window_end: str = "11:25"         # last ENTRY bar (afternoon session: 15:25)
     flat_by: str = "15:55"            # open trades may run past the window to their stop/
                                       # target; force-flat at this bar's close (no overnight)
     decision_latency_s: float = 0.0   # live parity: seconds after the signal bar closes
@@ -86,8 +87,9 @@ class Trade:
 
 
 def session_window(cont: pd.DataFrame, session_date: str,
-                   window_end: str = "11:25") -> pd.DataFrame:
-    open_ts = pd.Timestamp(f"{session_date} 09:30", tz=ET)
+                   window_end: str = "11:25",
+                   window_start: str = "09:30") -> pd.DataFrame:
+    open_ts = pd.Timestamp(f"{session_date} {window_start}", tz=ET)
     end_ts = pd.Timestamp(f"{session_date} {window_end}", tz=ET)
     return cont[(cont.index >= open_ts) & (cont.index <= end_ts)]
 
@@ -128,12 +130,12 @@ def _hit(side: str, stop: float, target: float, hi: float, lo: float):
 def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
                 cfg: Config = Config(), *, m1: Optional[pd.DataFrame] = None,
                 stats: Optional[dict] = None) -> list[Trade]:
-    win = session_window(cont, session_date, cfg.window_end)
+    win = session_window(cont, session_date, cfg.window_end, cfg.window_start)
     if len(win) < 2:
         return []
     # exit frame: same bars as `win` plus the rest of the day up to flat_by; `win`
-    # is a prefix of `ext` (same 09:30 start), so bar indices line up
-    ext = session_window(cont, session_date, cfg.flat_by)
+    # is a prefix of `ext` (same window start), so bar indices line up
+    ext = session_window(cont, session_date, cfg.flat_by, cfg.window_start)
     if len(ext) < len(win):
         ext = win
     slip = cfg.slippage_ticks * cfg.tick
@@ -144,7 +146,8 @@ def run_session(cont: pd.DataFrame, session_date: str, strategy: Strategy,
         if rm.session_halted()[0]:     # circuit breakers: max trades / consec loss / daily loss
             break
         cur_ts = win.index[i]
-        sig = strategy(build_sidecar(cont, cur_ts), win.iloc[: i + 1])
+        sig = strategy(build_sidecar(cont, cur_ts, window_start=cfg.window_start),
+                       win.iloc[: i + 1])
         if sig is None:
             i += 1
             continue

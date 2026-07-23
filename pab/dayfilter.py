@@ -78,3 +78,92 @@ def grade(feats: dict | None, variant: str = "combo") -> str:
         compressed = f["range_vs_adr"] < 0.65
         return "C" if (chop_texture or compressed) else "A"
     raise ValueError(variant)
+
+
+# ---- LLM day grader: the model judges A/C itself (user-directed). Inputs are
+# STRICTLY prospective: yesterday's full RTH table + overnight/gap for the AM
+# window; plus TODAY'S morning table for the PM window (already history at 13:30).
+# Cached on disk so identical (inputs, model) never re-pays. ----
+
+GRADER_SYSTEM = """You are an Al Brooks day-type analyst. Judge whether the UPCOMING \
+trading window is worth trading with a with-trend price-action strategy.
+
+Grade A = tradeable: odds favor directional structure (trend legs, breakout with \
+follow-through, clean two-legged pullbacks).
+Grade C = skip: odds favor a two-sided chop/barbwire session (high bar overlap, low \
+directional efficiency, many small-body bars, always-in flip-flopping).
+
+You see ONLY information available BEFORE the window opens. Weigh: yesterday's texture \
+(overlap/efficiency), range vs recent average, the overnight gap (big gaps breed trend \
+days more often), and — for afternoon windows — this morning's character and where price \
+sits in the morning range. Be decisive; roughly half of all days are C.
+
+Return ONLY JSON: {"grade": "A" | "C", "confidence": <0-100>, "reason": "<one or two \
+sentences citing the specific evidence>"}"""
+
+
+def _session_table_of(cont, start_ts, end_ts) -> str:
+    sl = cont[(cont.index >= start_ts) & (cont.index <= end_ts)]
+    rows = ["time|open|high|low|close"]
+    for ts, r in sl.iterrows():
+        rows.append(f"{ts.strftime('%H:%M')}|{r.open:g}|{r.high:g}|{r.low:g}|{r.close:g}")
+    return "\n".join(rows)
+
+
+def grade_llm(cont, session_date: str, *, window: str = "am", cfg=None) -> dict:
+    """Opus-judged day grade. Returns {"grade","confidence","reason"} (+"_cached")."""
+    import hashlib
+    import json as _json
+    from pathlib import Path
+
+    from pab.agent import AgentConfig, CACHE_DIR, _loads_lenient
+    from pab.review import _chat_text
+
+    cfg = cfg or AgentConfig()
+    open_ts = pd.Timestamp(f"{session_date} 09:30", tz=ET)
+    feats = day_features(cont, session_date)
+    if feats is None:
+        return {"grade": "A", "confidence": 0, "reason": "no prior-day data"}
+
+    before = cont[cont.index < open_ts]
+    prior_days = sorted({d for d in before.index.date if d < open_ts.date()})
+    d1 = prior_days[-1]
+    y_tbl = _session_table_of(cont, pd.Timestamp(f"{d1} 09:30", tz=ET),
+                              pd.Timestamp(f"{d1} 15:55", tz=ET))
+    overnight = before[before.index > pd.Timestamp(f"{d1} 15:55", tz=ET)]
+    on_line = (f"overnight: high {float(overnight['high'].max()):g} / "
+               f"low {float(overnight['low'].min()):g}" if len(overnight) else
+               "overnight: n/a")
+    today = cont[(cont.index >= open_ts)]
+    gap = (f"{float(today['open'].iloc[0]) - float(y_tbl.splitlines()[-1].split('|')[-1]):+.2f}"
+           if len(today) else "n/a")
+
+    parts = [f"UPCOMING WINDOW: {'09:30-11:30' if window == 'am' else '13:30-15:30'} ET "
+             f"on {session_date}",
+             f"yesterday features: {feats}",
+             f"YESTERDAY ({d1}) 5m RTH bars:\n{y_tbl}", on_line,
+             f"today's RTH open gap vs yesterday close: {gap}"]
+    if window == "pm":
+        am_tbl = _session_table_of(cont, open_ts,
+                                   pd.Timestamp(f"{session_date} 13:25", tz=ET))
+        parts.append(f"THIS MORNING ({session_date} 09:30-13:25) 5m bars:\n{am_tbl}")
+    user = "\n\n".join(parts) + '\n\nReturn ONLY the JSON: {"grade","confidence","reason"}'
+
+    key = hashlib.sha256(_json.dumps(
+        {"provider": cfg.provider, "model": cfg.resolved_model(), "window": window,
+         "system": GRADER_SYSTEM, "user": user}, sort_keys=True).encode()).hexdigest()
+    cache = Path(CACHE_DIR).parent / "daygrades" / f"{key}.json"
+    if cache.exists():
+        try:
+            out = _json.loads(cache.read_text("utf-8"))
+            out["_cached"] = True
+            return out
+        except Exception:  # noqa: BLE001
+            pass
+    out = _loads_lenient(_chat_text(GRADER_SYSTEM, user, cfg))
+    if out.get("grade") not in ("A", "C"):
+        out = {"grade": "A", "confidence": 0,
+               "reason": f"unparseable grade, defaulting A: {str(out)[:80]}"}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(_json.dumps(out, ensure_ascii=False), "utf-8")
+    return out

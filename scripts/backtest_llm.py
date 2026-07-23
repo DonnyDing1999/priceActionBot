@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pab.agent import AgentConfig, key_status  # noqa: E402 (loads .env)
 from pab.backtest import Config, run_session, summarize  # noqa: E402
 from pab.bars import complete_sessions, load_bars  # noqa: E402
-from pab.dayfilter import day_features, grade  # noqa: E402
+from pab.dayfilter import day_features, grade, grade_llm  # noqa: E402
 from pab.journal import Journal  # noqa: E402
 from pab.llm_strategy import LLMStrategy  # noqa: E402
 
@@ -42,12 +42,21 @@ def main() -> None:
 
     n = int(os.getenv("N_SESSIONS", "3"))
     workers = int(os.getenv("PA_WORKERS", "3"))
-    dayfilter = os.getenv("PA_DAYFILTER", "overlap")   # off | overlap | efficiency | combo
+    dayfilter = os.getenv("PA_DAYFILTER", "overlap")  # off | overlap | efficiency | combo | llm
     cfg = AgentConfig()
+
+    # session window: am = the opening two hours (default); pm = 13:30-15:30 afternoon
+    window = cfg.window
+    if window == "pm":
+        ecfg = Config(window_start="13:30", window_end="15:25")
+        w_first, w_last = "13:30", "15:25"
+    else:
+        ecfg = Config()
+        w_first, w_last = "09:30", "11:25"
 
     cont = load_bars(RAW)
     m1 = load_bars(RAW_1M) if RAW_1M.exists() else None
-    all_sessions = complete_sessions(cont)
+    all_sessions = complete_sessions(cont, first=w_first, last=w_last)
     sl = os.getenv("PA_SLICE")           # e.g. "0:20" = first 20 sessions; overrides N_SESSIONS
     if sl:
         a, _, b = sl.partition(":")
@@ -58,21 +67,27 @@ def main() -> None:
     print(f"LLM backtest — provider={cfg.provider} model={cfg.resolved_model()} "
           f"temp={cfg.temperature} cache={'on' if cfg.cache else 'off'} "
           f"m1={'on' if m1 is not None else 'off'} workers={workers} "
-          f"dayfilter={dayfilter}")
+          f"dayfilter={dayfilter} window={window}")
     print(f"{len(sessions)} sessions {sessions}\n", flush=True)
 
     def run_one(s: str):
-        # day-level chop gate: a C-graded day is skipped entirely (no LLM calls) —
-        # Brooks' 'most days are not worth trading', validated by replay experiment
-        if dayfilter != "off" and grade(day_features(cont, s), dayfilter) == "C":
+        # day-level chop gate: a C-graded day is skipped entirely (no per-bar LLM calls).
+        # 'llm' = the model judges A/C itself from strictly-prospective inputs
+        # (yesterday + overnight; + this morning for the pm window); else mechanical.
+        if dayfilter == "llm":
+            g = grade_llm(cont, s, window=window, cfg=cfg)
+            if g["grade"] == "C":
+                return s, [], None, {"day_grade": "C", "grade_info": g}
+        elif dayfilter != "off" and grade(day_features(cont, s), dayfilter) == "C":
             return s, [], None, {"day_grade": "C"}
         strat = LLMStrategy(cont, cfg=cfg)   # one instance per session (own state)
         stats: dict = {}
-        trades = run_session(cont, s, strat, Config(), m1=m1, stats=stats)
+        trades = run_session(cont, s, strat, ecfg, m1=m1, stats=stats)
         return s, trades, strat, stats
 
-    journal = Journal(run_id=f"bt_{cfg.provider}", provider=cfg.provider,
-                      model=cfg.resolved_model())
+    journal = Journal(run_id=f"bt_{cfg.provider}" + ("_pm" if window == "pm" else ""),
+                      provider=cfg.provider, model=cfg.resolved_model())
+    jdir = ROOT / "data" / ("journal_pm" if window == "pm" else "journal")
     all_trades, err_total, gate_total, hit_total = [], 0, 0, 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(run_one, s): s for s in sessions}
@@ -85,11 +100,14 @@ def main() -> None:
                       flush=True)
                 continue
             if strat is None:            # C-graded day: journal the skip, zero trades
-                journal.record_decision(s, 0, "09:30",
+                gi = stats.get("grade_info") or {}
+                journal.record_decision(s, 0, w_first,
                                         {"action": "no_trade",
-                                         "reason": f"day_gate: C ({dayfilter})"})
-                journal.save()
-                print(f"[{s}] C-DAY skipped (day gate)", flush=True)
+                                         "reason": f"day_gate: C ({dayfilter}) "
+                                                   f"{gi.get('reason', '')}"[:220]})
+                journal.save(dir=jdir)
+                why = f" | {gi.get('reason', '')[:90]}" if gi else ""
+                print(f"[{s}] C-DAY skipped (day gate){why}", flush=True)
                 continue
             all_trades.extend(trades)
             err_total += strat.errors
@@ -99,7 +117,7 @@ def main() -> None:
                 journal.record_decision(s, d["bar"], d["time"], d["decision"],
                                         sidecar=d["sidecar"])
             journal.record_trades(s, trades)
-            journal.save()   # flush incrementally so a mid-run check can read journals
+            journal.save(dir=jdir)  # flush incrementally so a mid-run check can read journals
             pnl = sum(t.pnl_usd for t in trades)
             veto = stats.get("veto", {})
             err = f" {strat.error_types}" if strat.error_types else ""
@@ -112,7 +130,7 @@ def main() -> None:
                       f"({t.r:+.2f}R) {t.exit_reason} | {t.reason[:90]}", flush=True)
 
     all_trades.sort(key=lambda t: (t.session, t.entry_ts))
-    paths = journal.save()
+    paths = journal.save(dir=jdir)
     print("\nSUMMARY:", json.dumps(summarize(all_trades), ensure_ascii=False), flush=True)
     print(f"totals: errors={err_total} gated={gate_total} cache_hits={hit_total} | "
           f"{len(paths)} journals -> data/journal/", flush=True)
