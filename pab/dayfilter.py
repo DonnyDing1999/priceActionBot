@@ -135,8 +135,10 @@ def grade_llm(cont, session_date: str, *, window: str = "am", cfg=None) -> dict:
                f"low {float(overnight['low'].min()):g}" if len(overnight) else
                "overnight: n/a")
     today = cont[(cont.index >= open_ts)]
-    gap = (f"{float(today['open'].iloc[0]) - float(y_tbl.splitlines()[-1].split('|')[-1]):+.2f}"
-           if len(today) else "n/a")
+    try:  # yesterday may have no RTH bars (dataset's first day) -> header-only table
+        gap = f"{float(today['open'].iloc[0]) - float(y_tbl.splitlines()[-1].split('|')[-1]):+.2f}"
+    except (ValueError, IndexError):
+        gap = "n/a"
 
     parts = [f"UPCOMING WINDOW: {'09:30-11:30' if window == 'am' else '13:30-15:30'} ET "
              f"on {session_date}",

@@ -133,7 +133,7 @@ def main() -> None:
     paths = journal.save(dir=jdir)
     print("\nSUMMARY:", json.dumps(summarize(all_trades), ensure_ascii=False), flush=True)
     print(f"totals: errors={err_total} gated={gate_total} cache_hits={hit_total} | "
-          f"{len(paths)} journals -> data/journal/", flush=True)
+          f"{len(paths)} journals -> {jdir.relative_to(ROOT)}/", flush=True)
 
 
 if __name__ == "__main__":
