@@ -13,6 +13,8 @@ from pab.experience import read_cases  # noqa: E402
 from pab.review import JDIR as _DEFAULT_JDIR, review_session  # noqa: E402
 
 JDIR = Path(os.getenv("PA_JOURNAL_DIR", str(_DEFAULT_JDIR)))
+INSTRUMENT = os.getenv("PA_INSTRUMENT", "mes")   # tags the promoted experience cases
+WINDOW = os.getenv("PA_WINDOW", "am")
 
 
 def main() -> None:
@@ -30,7 +32,7 @@ def main() -> None:
 
     for s in sessions:
         try:
-            r = review_session(s, jdir=JDIR)
+            r = review_session(s, jdir=JDIR, instrument=INSTRUMENT, window=WINDOW)
         except Exception as e:  # noqa: BLE001
             print(f"=== {s} === ERROR: {type(e).__name__}: {str(e)[:140]}\n")
             continue

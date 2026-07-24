@@ -1,11 +1,24 @@
 """Bar-series helpers (no plotting/LLM deps) shared by renderer, features, backtest."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
 
 ET = "America/New_York"
+
+# CME outright contract symbol = <root><month-code><year-digit>, e.g. MESH6, MNQU6.
+# Month codes: F G H J K M N Q U V X Z (Jan..Dec).
+_CONTRACT_RE = re.compile(r"^([A-Z]+?)[FGHJKMNQUVXZ]\d$")
+
+
+def contract_root(symbol: str) -> str | None:
+    """Instrument root of a CME contract symbol, stripping the month+year suffix:
+    'MESH6' -> 'MES', 'MNQU6' -> 'MNQ'. Returns None for anything that isn't a plain
+    outright (e.g. calendar spreads like 'MESH6-MESM6') so callers can skip it."""
+    m = _CONTRACT_RE.match(symbol)
+    return m.group(1) if m else None
 
 
 def load_bars(path: str | Path) -> pd.DataFrame:

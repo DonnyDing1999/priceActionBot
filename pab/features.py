@@ -8,10 +8,13 @@ from __future__ import annotations
 import pandas as pd
 
 from pab.bars import ET, add_ema, prior_rth_close
+from pab.instruments import MES
 
-TICK = 0.25
-POINT_VALUE_MES = 5.0
-PER_TRADE_RISK_USD = 75.0
+# single-sourced from the MES spec so the risk arithmetic lives in one place; the
+# module-level names are kept so downstream refs and the sidecar config stay unchanged
+TICK = MES.tick
+POINT_VALUE_MES = MES.point_value_usd
+PER_TRADE_RISK_USD = MES.per_trade_risk_usd
 WINDOW_BARS = 24  # 09:30-11:30 ET
 
 

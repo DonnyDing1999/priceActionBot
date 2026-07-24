@@ -33,8 +33,6 @@ from pab.orchestration import (WINDOWS, day_gate, engine_config,  # noqa: E402
                                journal_dir, run_id)
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW = ROOT / "data" / "raw" / os.getenv("PA_BARS", "mes_5m.parquet")
-RAW_1M = ROOT / "data" / "raw" / "mes_1m.parquet"
 
 
 def main() -> None:
@@ -55,8 +53,11 @@ def main() -> None:
     ecfg = engine_config(spec, window)
     w_first, w_last = WINDOWS[window]["start"], WINDOWS[window]["end"]
 
-    cont = load_bars(RAW)
-    m1 = load_bars(RAW_1M) if RAW_1M.exists() else None
+    # parquet paths follow the instrument (mes_5m/mnq_5m/...); PA_BARS overrides the 5m file
+    raw = ROOT / "data" / "raw" / os.getenv("PA_BARS", f"{cfg.instrument}_5m.parquet")
+    raw_1m = ROOT / "data" / "raw" / f"{cfg.instrument}_1m.parquet"
+    cont = load_bars(raw)
+    m1 = load_bars(raw_1m) if raw_1m.exists() else None
     all_sessions = complete_sessions(cont, first=w_first, last=w_last)
     sl = os.getenv("PA_SLICE")           # e.g. "0:20" = first 20 sessions; overrides N_SESSIONS
     if sl:

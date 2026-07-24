@@ -41,8 +41,6 @@ from pab.bars import complete_sessions, load_bars  # noqa: E402
 from pab.llm_strategy import LLMStrategy, obvious_no_trade  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW = ROOT / "data" / "raw" / os.getenv("PA_BARS", "mes_5m.parquet")
-RAW_1M = ROOT / "data" / "raw" / "mes_1m.parquet"
 
 
 class CacheOnlyStrategy:
@@ -85,8 +83,11 @@ class CacheOnlyStrategy:
 
 def main() -> None:
     cfg = AgentConfig()
-    cont = load_bars(RAW)
-    m1 = load_bars(RAW_1M) if RAW_1M.exists() else None
+    # parquet paths follow the instrument (mes_5m/mnq_5m/...); PA_BARS overrides the 5m file
+    raw = ROOT / "data" / "raw" / os.getenv("PA_BARS", f"{cfg.instrument}_5m.parquet")
+    raw_1m = ROOT / "data" / "raw" / f"{cfg.instrument}_1m.parquet"
+    cont = load_bars(raw)
+    m1 = load_bars(raw_1m) if raw_1m.exists() else None
     sessions = complete_sessions(cont)[-int(os.getenv("N_SESSIONS", "128")):]
 
     snap = os.getenv("PA_EXPERIENCE_SNAPSHOT")   # freeze experience -> cache-key parity

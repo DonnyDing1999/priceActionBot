@@ -23,7 +23,8 @@ def _minutes(hhmm: str) -> int:
 def capital_metrics(trades, *, capital: float = 5000.0, point_value: float = 5.0,
                     day_margin: float = 50.0, commission_rt: float = 1.5,
                     tick_value: float = 1.25, rth_minutes: int = 390,
-                    n_sessions: int | None = None, trading_days_year: int = 252) -> dict:
+                    n_sessions: int | None = None, trading_days_year: int = 252,
+                    per_trade_cap_usd: float = 75.0) -> dict:
     """Metric dict over closed trades. `n_sessions` = sessions OBSERVED (incl.
     no-trade days); defaults to the number of distinct sessions with trades."""
     rows = [asdict(t) if is_dataclass(t) else dict(t) for t in trades]
@@ -73,7 +74,7 @@ def capital_metrics(trades, *, capital: float = 5000.0, point_value: float = 5.0
         cw, cl = (cw + 1, 0) if p > 0 else (0, cl + 1)
         max_w, max_l = max(max_w, cw), max(max_l, cl)
     risk_usd = [r["risk_pts"] * point_value for r in rows]
-    cap_usage = [min(1.0, ru / 75.0) for ru in risk_usd]
+    cap_usage = [min(1.0, ru / per_trade_cap_usd) for ru in risk_usd]
     n_stop = sum(1 for r in rows if r["exit_reason"] == "stop")
     est_costs = len(rows) * (commission_rt + tick_value) + n_stop * tick_value
 

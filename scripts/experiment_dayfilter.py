@@ -17,7 +17,7 @@ from pab.bars import load_bars  # noqa: E402
 from pab.dayfilter import day_features, grade  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-JDIR = ROOT / "data" / "journal"
+JDIR = ROOT / "data" / "journal" / "mes" / "am"
 SPLIT = "2026-02-18"
 
 

@@ -88,7 +88,7 @@ N_SESSIONS=5 PA_PROVIDER=zhipu .venv/bin/python scripts/backtest_llm.py
 .venv/bin/python scripts/backtest_cached.py
 
 # 绩效报告(资金利用率、Sharpe、回撤,自动按污染边界分段)
-PA_CAPITAL=5000 .venv/bin/python scripts/report.py
+PA_CAPITAL=5000 PA_JOURNAL_DIR=data/journal/mes/am .venv/bin/python scripts/report.py
 
 # 复盘 agent(增量,跳过已有 review 的 session)
 PA_PROVIDER=claude_cli .venv/bin/python scripts/review_day.py

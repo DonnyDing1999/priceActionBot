@@ -65,7 +65,26 @@ SPY = InstrumentSpec(
     ),
 )
 
-SPECS = {"mes": MES, "spy": SPY}
+MNQ = InstrumentSpec(
+    name="mnq",
+    symbol="MNQ",
+    tick=0.25,
+    point_value_usd=2.0,
+    qty=1,
+    per_trade_risk_usd=75.0,
+    min_risk_pts=5.0,
+    role_text=(
+        "You are an Al Brooks price-action trader trading 1 micro contract of MNQ "
+        "(Micro E-mini Nasdaq-100) on the 5-minute chart. You ENTER only during the first "
+        "two hours of the US regular session (09:30-11:30 ET); an open position is then "
+        "managed to its stop or target and force-closed only at the 16:00 session close "
+        "(never held overnight). Per-trade risk is capped at $75, which at $2/point means "
+        "the stop may be at most 37.5 MNQ points from entry (minimum 5 points — tighter "
+        "stops drown in costs)."
+    ),
+)
+
+SPECS = {"mes": MES, "spy": SPY, "mnq": MNQ}
 
 
 def get_spec(name: str) -> InstrumentSpec:

@@ -107,7 +107,8 @@ def _chat_text(system: str, user: str, cfg: AgentConfig) -> str:
 
 
 def review_session(session: str, *, cfg: Optional[AgentConfig] = None,
-                   write: bool = True, jdir: Optional[Path] = None) -> dict:
+                   write: bool = True, jdir: Optional[Path] = None,
+                   instrument: str = "mes", window: str = "am") -> dict:
     cfg = cfg or AgentConfig()
     jdir = jdir if jdir is not None else JDIR
     journal = json.loads((jdir / f"{session}.json").read_text("utf-8"))
@@ -115,6 +116,7 @@ def review_session(session: str, *, cfg: Optional[AgentConfig] = None,
     if write:
         (jdir / f"{session}.review.json").write_text(
             json.dumps(review, ensure_ascii=False, indent=2), "utf-8")
-        n = add_cases(review.get("experience_cases", []), session)
+        n = add_cases(review.get("experience_cases", []), session,
+                      instrument=instrument, window=window)
         review["_experience_cases_written"] = n
     return review

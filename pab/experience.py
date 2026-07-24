@@ -14,12 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "experience" / "cases.jsonl"
 
 
-def add_cases(cases: list[dict], session: str) -> int:
+def add_cases(cases: list[dict], session: str, instrument: str = "mes",
+              window: str = "am") -> int:
     CASES.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with CASES.open("a", encoding="utf-8") as f:
         for c in cases:
             rec = {"session": session,
+                   "instrument": instrument,
+                   "window": window,
                    "regime": c.get("regime", "unknown"),
                    "outcome": c.get("outcome", "unknown"),
                    "setup": c.get("setup", ""),
@@ -44,6 +47,9 @@ def select_cases(cases: list[dict], regime: str | tuple[str, ...] | None = None,
     walk-forward honest: only lessons from sessions STRICTLY BEFORE that date are
     eligible — a lesson may describe its own day, never a later one."""
     rows = cases
+    # instrument/window are stored on each case but deliberately NOT filtered on here:
+    # cross-instrument/cross-window lessons are shared on purpose, and leaving retrieval
+    # untouched keeps as_prompt_block output (hence decision-cache keys) byte-identical.
     if before:
         rows = [r for r in rows if r.get("session", "") < before]
     if regime:

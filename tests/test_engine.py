@@ -607,3 +607,36 @@ def test_run_aborted_streak_resets_on_success(monkeypatch):
     for _ in range(3):                     # three more failures, but the streak restarted
         strat(sc, None)
     assert strat.consec_failures == 3 and strat.errors == 5  # never reached 4-in-a-row
+
+
+# ---------- Batch B: MNQ spec, contract-root parser, metrics cap param ----------
+
+def test_mnq_spec_sanity():
+    from pab.instruments import MNQ, SPECS, get_spec
+    assert MNQ.tick == 0.25 and MNQ.point_value_usd == 2.0 and MNQ.qty == 1
+    assert MNQ.per_trade_risk_usd == 75.0 and MNQ.min_risk_pts == 5.0
+    assert MNQ.per_trade_risk_pts == 37.5          # $75 cap / $2 per point
+    assert SPECS["mnq"] is MNQ and get_spec("MNQ") is MNQ
+    assert "Micro E-mini Nasdaq-100" in MNQ.role_text and "37.5" in MNQ.role_text
+
+
+def test_contract_root_regex():
+    from pab.bars import contract_root
+    assert contract_root("MESH6") == "MES"          # <root><month><year>
+    assert contract_root("MNQU6") == "MNQ"
+    assert contract_root("ESZ5") == "ES"
+    assert contract_root("MESH6-MESM6") is None      # calendar spread -> not an outright
+    assert contract_root("MES.FUT") is None          # parent symbol -> skipped
+
+
+def test_metrics_per_trade_cap_usd_param():
+    from pab.metrics import capital_metrics
+    trades = [{"session": "2026-07-06", "entry_ts": "09:40", "exit_ts": "10:10",
+               "entry": 7000.0, "risk_pts": 10.0, "pnl_usd": +50.0,
+               "exit_reason": "target"}]
+    # risk_usd = 10pt * $5 = $50; at the default $75 cap -> 50/75 = 67%
+    d75 = capital_metrics(trades, n_sessions=1)
+    assert d75["trading"]["risk_budget_usage_median_pct"] == round(100 * 50 / 75, 0)
+    # a tighter $50 cap makes the same $50 risk use its full budget (min(1.0, 50/50))
+    d50 = capital_metrics(trades, n_sessions=1, per_trade_cap_usd=50.0)
+    assert d50["trading"]["risk_budget_usage_median_pct"] == 100.0

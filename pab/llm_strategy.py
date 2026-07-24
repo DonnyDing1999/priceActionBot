@@ -1,9 +1,8 @@
 """Adapter: run the decision agent as a backtest Strategy.
 
 For each flat bar the engine hands us we call the agent on the no-lookahead sidecar
-and return a Signal or None. In the default NUMERIC path nothing is rendered — the
-agent reads `session_bars` from the sidecar. With cfg.vision set we also render the
-chart up to THAT bar only (no-lookahead) and pass the image.
+and return a Signal or None. Perception is NUMERIC — nothing is rendered; the agent
+reads the developing session out of the sidecar's `session_table`.
 
 A zero-cost code GATE (PA_GATE=0 to disable) skips the LLM on bars that are obvious
 no-trades under the Brooks rules (deliberately minimal — when in doubt, ask the LLM).
@@ -14,8 +13,6 @@ risk layer downstream, not here. Use ONE instance per session (per-session state
 from __future__ import annotations
 
 import os
-import tempfile
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -52,7 +49,7 @@ def obvious_no_trade(sidecar: dict) -> Optional[str]:
 
 
 class LLMStrategy:
-    def __init__(self, cont: pd.DataFrame, *, render_dir: str | Path | None = None,
+    def __init__(self, cont: pd.DataFrame, *,
                  cfg: AgentConfig | None = None, gate: Optional[bool] = None,
                  frozen_cases: list | None = None):
         self.cont = cont
@@ -62,8 +59,6 @@ class LLMStrategy:
         # freeze the experience library for this run (reproducible); snapshot once here
         # if the caller didn't hand one down
         self.frozen_cases = load_all_cases() if frozen_cases is None else frozen_cases
-        self.render_dir = Path(render_dir) if render_dir else Path(tempfile.gettempdir())
-        self.render_dir.mkdir(parents=True, exist_ok=True)
         self.decisions: list[dict] = []  # every bar: decision | gated | error (for journal)
         self.errors = 0                  # decision calls that failed -> no_trade
         self.error_types: dict[str, int] = {}  # exception class -> count (diagnosis)
@@ -90,15 +85,8 @@ class LLMStrategy:
                                        "reason": f"gated: {tag}"})
                 return None
 
-        image_path = None
-        if self.cfg.vision:  # only render when the vision path is explicitly enabled
-            from pab.render import render_session
-            current_ts = bars.index[-1]
-            session_date = str(current_ts.date())
-            image_path = self.render_dir / f"{session_date}_{current_ts.strftime('%H%M')}.png"
-            render_session(self.cont, session_date, up_to=current_ts, out_path=image_path)
         try:
-            d = decide(sidecar, image_path, cfg=self.cfg, cases=self.frozen_cases)
+            d = decide(sidecar, cfg=self.cfg, cases=self.frozen_cases)
         except Exception as e:  # noqa: BLE001 — any error on THIS bar -> no_trade, day survives
             self.errors += 1
             et = type(e).__name__
