@@ -198,14 +198,16 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
     }
 
 
-def classify_regime(sidecar: dict) -> str:
+def classify_regime(sidecar: dict, window: str = "am") -> str:
     """Coarse, deterministic regime from the sidecar (no LLM, no lookahead) — used to
     ROUTE which setup cards enter the prompt, and to retrieve regime-matched experience.
     Deliberately generous: it narrows the card set, the model still makes the read.
-      open  — first ~6 bars, session structure not yet formed
+      open  — first ~6 bars, session structure not yet formed (AM window only: the
+              afternoon window opens onto a morning that already happened, so bar 3
+              of the PM window is not an "opening" bar — fall through to trend/range)
       trend — always-in one side + EMA slope/extension agree
       range — everything else (two-sided, EMA flat, price straddling)"""
-    if sidecar["bar_index_from_open"] <= 6:
+    if window == "am" and sidecar["bar_index_from_open"] <= 6:
         return "open"
     if (sidecar["always_in_hint"] in ("ail", "ais")
             and (abs(sidecar["ema_slope_pts_3bar"]) >= 1.0

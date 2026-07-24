@@ -308,10 +308,17 @@ _REGIME_FAMILY = {
 }
 
 
-def _user_text(sidecar: dict, regime: Optional[str] = None) -> str:
-    from pab.experience import as_prompt_block, read_cases  # closed loop: reviewed lessons
-    exp = as_prompt_block(read_cases(regime=_REGIME_FAMILY.get(regime), k=6,
-                                     before=sidecar.get("session_date")))
+def _user_text(sidecar: dict, regime: Optional[str] = None,
+               cases: Optional[list] = None) -> str:
+    from pab.experience import (as_prompt_block, read_cases,  # closed loop: lessons
+                                select_cases)
+    fam = _REGIME_FAMILY.get(regime)
+    before = sidecar.get("session_date")
+    # `cases` given = a run's frozen snapshot (reproducible); None = read live from disk.
+    # select_cases(load_all_cases(), ...) == read_cases(...), so the text is byte-identical.
+    cs = (select_cases(cases, regime=fam, k=6, before=before) if cases is not None
+          else read_cases(regime=fam, k=6, before=before))
+    exp = as_prompt_block(cs)
     prefix = (exp + "\n\n") if exp else ""
     return (prefix + "Numeric sidecar (exact levels, no-lookahead):\n```json\n"
             + json.dumps(sidecar, ensure_ascii=False) + "\n```\n\n"
@@ -539,7 +546,7 @@ def _cache_key(cfg: AgentConfig, system: str, user: str,
 
 
 def decide(sidecar: dict, image_path: str | Path | None = None, *,
-           cfg: Optional[AgentConfig] = None) -> dict:
+           cfg: Optional[AgentConfig] = None, cases: Optional[list] = None) -> dict:
     """Decision call. Numeric by default; sends the chart image only when cfg.vision
     is set AND an image_path is given. Identical (model, prompts, sidecar) calls are
     served from the on-disk cache unless cfg.cache is off. Returns the decision dict
@@ -552,11 +559,11 @@ def decide(sidecar: dict, image_path: str | Path | None = None, *,
                    if cfg.vision and image_path is not None else None)
     try:  # stage 1 of diagnose->route: free deterministic regime classifier
         from pab.features import classify_regime
-        regime = classify_regime(sidecar)
+        regime = classify_regime(sidecar, cfg.window)
     except Exception:  # noqa: BLE001 — partial sidecars (tools/tests) -> full KB
         regime = None
     system = _system(cfg.vision, regime, cfg.instrument, cfg.window)
-    user = _user_text(sidecar, regime)
+    user = _user_text(sidecar, regime, cases=cases)
 
     cache_file = None
     if cfg.cache:

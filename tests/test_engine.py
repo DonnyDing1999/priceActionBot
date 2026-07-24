@@ -500,3 +500,110 @@ def test_magnet_veto_engine_integration():
     trades = run_session(cont, SESSION, fire_at(1, sig), stats=stats)
     assert trades == []
     assert stats["veto"] == {"rr_to_magnet": 1}
+
+
+# ---------- Batch A: orchestration + experience freeze + run circuit breaker ----------
+
+def test_engine_config_windows_and_override():
+    from pab.instruments import MES, SPY
+    from pab.orchestration import engine_config
+    am = engine_config(MES, "am")
+    assert (am.window_start, am.window_end, am.flat_by) == ("09:30", "11:25", "15:55")
+    assert am.tick == 0.25 and am.point_value == 5.0
+    assert am.per_trade_risk_usd == 75.0 and am.min_risk_pts == 2.0
+    pm = engine_config(MES, "pm")
+    assert (pm.window_start, pm.window_end, pm.flat_by) == ("13:30", "15:25", "15:55")
+    # spec fields flow through for a non-MES instrument
+    assert engine_config(SPY, "am").point_value == 50.0 and engine_config(SPY, "am").tick == 0.01
+    # **overrides win over the window/spec-derived values
+    ov = engine_config(MES, "am", min_rr=1.5, magnet_veto=False, decision_latency_s=90)
+    assert ov.min_rr == 1.5 and ov.magnet_veto is False and ov.decision_latency_s == 90
+
+
+def test_journal_dir_paths():
+    from pab.orchestration import journal_dir
+    assert journal_dir("mes", "am").as_posix().endswith("data/journal/mes/am")
+    assert journal_dir("mes", "pm").as_posix().endswith("data/journal/mes/pm")
+    assert journal_dir("spy", "am", live=True).as_posix().endswith("data/journal/spy/live")
+
+
+def test_select_cases_parity_and_fallback(tmp_path, monkeypatch):
+    import pab.experience as ex
+    from pab.experience import (as_prompt_block, load_all_cases, read_cases,
+                                select_cases)
+    f = tmp_path / "cases.jsonl"
+    f.write_text(
+        '{"session":"2026-03-01","regime":"spike","outcome":"success","setup":"s1","note":"n1"}\n'
+        '{"session":"2026-03-02","regime":"trading_range","outcome":"failure","setup":"s2","note":"n2"}\n'
+        '{"session":"2026-03-03","regime":"spike","outcome":"success","setup":"s3","note":"n3"}\n'
+        '{"session":"2026-03-04","regime":"micro_channel","outcome":"success","setup":"s4","note":"n4"}\n',
+        "utf-8")
+    monkeypatch.setattr(ex, "CASES", f)
+    frozen = load_all_cases()
+    fam = ("spike", "micro_channel")
+    # regime-match: the frozen-snapshot block is byte-identical to the legacy read_cases path
+    legacy = as_prompt_block(read_cases(regime=fam, k=6, before="2026-03-10"))
+    new = as_prompt_block(select_cases(frozen, regime=fam, k=6, before="2026-03-10"))
+    assert new == legacy
+    assert "n1" in new and "n3" in new and "n4" in new and "n2" not in new  # family only
+    # fallback: a family with no matches -> recent-any (last k of ALL), still parity
+    fb_legacy = as_prompt_block(read_cases(regime=("nonexistent",), k=2))
+    fb_new = as_prompt_block(select_cases(frozen, regime=("nonexistent",), k=2))
+    assert fb_new == fb_legacy
+    assert "n3" in fb_new and "n4" in fb_new and "n1" not in fb_new  # last 2 of all
+    # date filter applied BEFORE the regime match, same as the legacy walk-forward guard
+    assert select_cases(frozen, regime=fam, k=6, before="2026-03-03") == \
+        [c for c in frozen if c["session"] < "2026-03-03" and c["regime"] in fam]
+
+
+def test_classify_regime_pm_window():
+    from pab.features import classify_regime
+    sc = {"bar_index_from_open": 3, "always_in_hint": "ail",
+          "ema_slope_pts_3bar": 5.0, "close_vs_ema_pts": 9.0}
+    assert classify_regime(sc, "pm") == "trend"   # early PM bar is NOT opening structure
+    assert classify_regime(sc, "am") == "open"     # early AM bar: opening structure
+    assert classify_regime(sc) == "open"           # window defaults to am
+
+
+def _abort_sidecar():
+    return {"bar_index_from_open": 5, "bar_time_et": "2026-07-06 09:50 EDT",
+            "bar": {"type": "trend_bull", "c": 100.0}}
+
+
+def test_run_aborted_after_4_consecutive_failures(monkeypatch):
+    import pytest
+    import pab.llm_strategy as ls
+    from pab.agent import AgentConfig
+
+    def boom(*a, **k):
+        raise RuntimeError("quota exhausted (429)")
+    monkeypatch.setattr(ls, "decide", boom)
+    strat = ls.LLMStrategy(None, cfg=AgentConfig(), gate=False, frozen_cases=[])
+    sc = _abort_sidecar()
+    for _ in range(3):                     # first 3 failures degrade this bar to no_trade
+        assert strat(sc, None) is None
+    assert strat.consec_failures == 3
+    with pytest.raises(ls.RunAborted):     # 4th consecutive failure aborts the run
+        strat(sc, None)
+    assert strat.errors == 4
+
+
+def test_run_aborted_streak_resets_on_success(monkeypatch):
+    import pab.llm_strategy as ls
+    from pab.agent import AgentConfig
+    calls = {"n": 0}
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 3:                # 3rd call succeeds -> streak clears
+            return {"action": "no_trade", "setup": "", "reason": "ok", "_usage": {}}
+        raise RuntimeError("boom")
+    monkeypatch.setattr(ls, "decide", flaky)
+    strat = ls.LLMStrategy(None, cfg=AgentConfig(), gate=False, frozen_cases=[])
+    sc = _abort_sidecar()
+    strat(sc, None); strat(sc, None)       # fail, fail
+    strat(sc, None)                        # success -> reset
+    assert strat.consec_failures == 0
+    for _ in range(3):                     # three more failures, but the streak restarted
+        strat(sc, None)
+    assert strat.consec_failures == 3 and strat.errors == 5  # never reached 4-in-a-row

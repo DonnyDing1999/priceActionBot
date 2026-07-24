@@ -15,7 +15,7 @@ from pab.agent import AgentConfig, _loads_lenient
 from pab.experience import add_cases
 
 ROOT = Path(__file__).resolve().parents[1]
-JDIR = ROOT / "data" / "journal"
+JDIR = ROOT / "data" / "journal" / "mes" / "am"
 
 REVIEW_SYSTEM = """You are a trading coach reviewing ONE day of an Al Brooks price-action \
 bot (MES, opening window 09:30-11:30 ET). You get the day's decision journal (each flat bar: \
@@ -107,12 +107,13 @@ def _chat_text(system: str, user: str, cfg: AgentConfig) -> str:
 
 
 def review_session(session: str, *, cfg: Optional[AgentConfig] = None,
-                   write: bool = True) -> dict:
+                   write: bool = True, jdir: Optional[Path] = None) -> dict:
     cfg = cfg or AgentConfig()
-    journal = json.loads((JDIR / f"{session}.json").read_text("utf-8"))
+    jdir = jdir if jdir is not None else JDIR
+    journal = json.loads((jdir / f"{session}.json").read_text("utf-8"))
     review = _loads_lenient(_chat_text(REVIEW_SYSTEM, _build_user(journal), cfg))
     if write:
-        (JDIR / f"{session}.review.json").write_text(
+        (jdir / f"{session}.review.json").write_text(
             json.dumps(review, ensure_ascii=False, indent=2), "utf-8")
         n = add_cases(review.get("experience_cases", []), session)
         review["_experience_cases_written"] = n

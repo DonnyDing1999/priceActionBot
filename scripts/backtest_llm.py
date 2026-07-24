@@ -13,6 +13,7 @@ data/journal/<session>.json — the same files the daily-review agent consumes.
 1-minute bars (data/raw/mes_1m.parquet) are used for intrabar fill/exit resolution
 when present.
 """
+import hashlib
 import json
 import os
 import sys
@@ -22,11 +23,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pab.agent import AgentConfig, key_status  # noqa: E402 (loads .env)
-from pab.backtest import Config, run_session, summarize  # noqa: E402
+from pab.backtest import run_session, summarize  # noqa: E402
 from pab.bars import complete_sessions, load_bars  # noqa: E402
-from pab.dayfilter import day_features, grade, grade_llm  # noqa: E402
+from pab.experience import load_all_cases  # noqa: E402
+from pab.instruments import get_spec  # noqa: E402
 from pab.journal import Journal  # noqa: E402
-from pab.llm_strategy import LLMStrategy  # noqa: E402
+from pab.llm_strategy import LLMStrategy, RunAborted  # noqa: E402
+from pab.orchestration import (WINDOWS, day_gate, engine_config,  # noqa: E402
+                               journal_dir, run_id)
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "data" / "raw" / os.getenv("PA_BARS", "mes_5m.parquet")
@@ -47,12 +51,9 @@ def main() -> None:
 
     # session window: am = the opening two hours (default); pm = 13:30-15:30 afternoon
     window = cfg.window
-    if window == "pm":
-        ecfg = Config(window_start="13:30", window_end="15:25")
-        w_first, w_last = "13:30", "15:25"
-    else:
-        ecfg = Config()
-        w_first, w_last = "09:30", "11:25"
+    spec = get_spec(cfg.instrument)
+    ecfg = engine_config(spec, window)
+    w_first, w_last = WINDOWS[window]["start"], WINDOWS[window]["end"]
 
     cont = load_bars(RAW)
     m1 = load_bars(RAW_1M) if RAW_1M.exists() else None
@@ -70,24 +71,30 @@ def main() -> None:
           f"dayfilter={dayfilter} window={window}")
     print(f"{len(sessions)} sessions {sessions}\n", flush=True)
 
+    cases = load_all_cases()   # snapshot the experience library ONCE for the whole run
+
     def run_one(s: str):
         # day-level chop gate: a C-graded day is skipped entirely (no per-bar LLM calls).
         # 'llm' = the model judges A/C itself from strictly-prospective inputs
         # (yesterday + overnight; + this morning for the pm window); else mechanical.
-        if dayfilter == "llm":
-            g = grade_llm(cont, s, window=window, cfg=cfg)
-            if g["grade"] == "C":
-                return s, [], None, {"day_grade": "C", "grade_info": g}
-        elif dayfilter != "off" and grade(day_features(cont, s), dayfilter) == "C":
-            return s, [], None, {"day_grade": "C"}
-        strat = LLMStrategy(cont, cfg=cfg)   # one instance per session (own state)
+        gate = day_gate(cont, s, mode=dayfilter, window=window, cfg=cfg)
+        if gate is not None:
+            gi = gate if gate.get("reason") else {}
+            return s, [], None, {"day_grade": "C", "grade_info": gi}
+        strat = LLMStrategy(cont, cfg=cfg, frozen_cases=cases)  # per-session state
         stats: dict = {}
         trades = run_session(cont, s, strat, ecfg, m1=m1, stats=stats)
         return s, trades, strat, stats
 
-    journal = Journal(run_id=f"bt_{cfg.provider}" + ("_pm" if window == "pm" else ""),
-                      provider=cfg.provider, model=cfg.resolved_model())
-    jdir = ROOT / "data" / ("journal_pm" if window == "pm" else "journal")
+    jdir = journal_dir(cfg.instrument, window)
+    jdir.mkdir(parents=True, exist_ok=True)
+    snap = jdir / "experience_snapshot.jsonl"      # freeze this run's experience library
+    snap.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cases),
+                    "utf-8")
+    exp_sha = hashlib.sha256(snap.read_bytes()).hexdigest()
+    journal = Journal(run_id=run_id(cfg.provider, cfg.instrument, window),
+                      provider=cfg.provider, model=cfg.resolved_model(),
+                      extra_meta={"experience_sha": exp_sha})
     all_trades, err_total, gate_total, hit_total = [], 0, 0, 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(run_one, s): s for s in sessions}
@@ -95,6 +102,13 @@ def main() -> None:
             s = futs[fut]
             try:
                 s, trades, strat, stats = fut.result()
+            except RunAborted as e:          # consecutive call failures -> stop the run
+                print("\n!! RUN ABORTED (consecutive call failures — quota/auth?)",
+                      flush=True)
+                pool.shutdown(wait=False, cancel_futures=True)
+                journal.meta["aborted"] = str(e)
+                journal.save(dir=jdir)
+                sys.exit(2)
             except Exception as e:  # noqa: BLE001 — a whole-session failure
                 print(f"[{s}] ERROR: {type(e).__name__}: {str(e)[:160]} — skipping",
                       flush=True)

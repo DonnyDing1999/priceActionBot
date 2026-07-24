@@ -27,19 +27,21 @@ import pandas as pd
 
 from pab.agent import AgentConfig, decide
 from pab.bars import ET
-from pab.dayfilter import day_features, grade
+from pab.experience import load_all_cases
 from pab.features import build_sidecar, classify_regime  # noqa: F401 (regime via decide)
 from pab.instruments import get_spec
 from pab.journal import Journal
 from pab.llm_strategy import LLMStrategy, obvious_no_trade
+from pab.orchestration import WINDOWS, day_gate, journal_dir
 from pab.risk import RiskManager
 
 ROOT = Path(__file__).resolve().parents[1]
-LIVE_JOURNAL_DIR = ROOT / "data" / "journal_live"
 KILL_FILE = Path(os.getenv("PA_KILL_FILE", ROOT / "KILL"))
 
-WINDOW_FIRST, WINDOW_LAST = "09:30", "11:25"   # entry-decision bars
-FLAT_BY = "15:55"                               # cancel + flatten, never overnight
+WINDOW = os.getenv("PA_WINDOW", "am")           # am | pm session window
+WINDOW_FIRST = WINDOWS[WINDOW]["start"]         # entry-decision bars
+WINDOW_LAST = WINDOWS[WINDOW]["end"]
+FLAT_BY = WINDOWS[WINDOW]["flat_by"]            # cancel + flatten, never overnight
 
 
 class LiveConfig:
@@ -117,6 +119,8 @@ class LiveTrader:
         self.session = str(pd.Timestamp.now(tz=ET).date())
         self.journal = Journal(run_id="live", provider=self.cfg.provider,
                                model=self.cfg.resolved_model())
+        self.jdir = journal_dir(self.spec.name, WINDOW, live=True)
+        self.frozen_cases = load_all_cases()   # freeze experience for this session
         self.pending: dict | None = None   # {"order_id", "bar_ts"} awaiting fill/cancel
         self.in_position = False
         self.entry_px: float | None = None
@@ -228,7 +232,7 @@ class LiveTrader:
                          sidecar)
             return
         try:
-            d = decide(sidecar, cfg=self.cfg)
+            d = decide(sidecar, cfg=self.cfg, cases=self.frozen_cases)
         except Exception as e:  # noqa: BLE001
             self._record(bar_i, bar_ts, {"action": "error",
                                          "reason": f"{type(e).__name__}: {str(e)[:120]}"},
@@ -265,7 +269,7 @@ class LiveTrader:
     def _record(self, bar_i, bar_ts, decision: dict, sidecar: dict) -> None:
         self.journal.record_decision(self.session, bar_i, bar_ts.strftime("%H:%M"),
                                      decision, sidecar=sidecar)
-        self.journal.save(dir=LIVE_JOURNAL_DIR)
+        self.journal.save(dir=self.jdir)
 
     def _log(self, msg: str, data: dict) -> None:
         print(f"[{pd.Timestamp.now(tz=ET).strftime('%H:%M:%S')}] {msg} "
@@ -283,9 +287,9 @@ class LiveTrader:
 
         # day-level chop gate from yesterday's texture (PA_DAYFILTER=off to disable)
         dayfilter = os.getenv("PA_DAYFILTER", "overlap")
-        day_grade = "A"
-        if dayfilter != "off" and len(m1):
-            day_grade = grade(day_features(to_5m(m1), self.session), dayfilter)
+        gate = (day_gate(to_5m(m1), self.session, mode=dayfilter, window=WINDOW,
+                         cfg=self.cfg) if len(m1) else None)
+        day_grade = "C" if gate is not None else "A"
         self._log("day grade", {"grade": day_grade, "variant": dayfilter})
 
         while True:

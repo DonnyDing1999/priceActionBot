@@ -34,9 +34,12 @@ def _brief(sidecar: dict) -> dict:
 class Journal:
     """Collects decisions + trades in memory, then writes one file per session."""
 
-    def __init__(self, run_id: str = "run", provider: str = "", model: str = ""):
+    def __init__(self, run_id: str = "run", provider: str = "", model: str = "",
+                 extra_meta: Optional[dict] = None):
         self.run_id = run_id
         self.meta = {"run_id": run_id, "provider": provider, "model": model}
+        if extra_meta:
+            self.meta.update(extra_meta)
         self.sessions: dict[str, dict] = {}
 
     def _bucket(self, session: str) -> dict:

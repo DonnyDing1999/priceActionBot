@@ -22,6 +22,13 @@ import pandas as pd
 
 from pab.agent import AgentConfig, decide
 from pab.backtest import Signal
+from pab.experience import load_all_cases
+
+
+class RunAborted(RuntimeError):
+    """Raised when decide() fails on 4 consecutive bars — a quota/auth outage, not a
+    per-bar blip. The runner catches this to abort the whole run loudly instead of
+    silently journaling every remaining bar as an error."""
 
 
 LAST_SIGNAL_BAR = 19  # a signal here fills at bar 20 (11:05). Entries stay in the opening
@@ -46,11 +53,15 @@ def obvious_no_trade(sidecar: dict) -> Optional[str]:
 
 class LLMStrategy:
     def __init__(self, cont: pd.DataFrame, *, render_dir: str | Path | None = None,
-                 cfg: AgentConfig | None = None, gate: Optional[bool] = None):
+                 cfg: AgentConfig | None = None, gate: Optional[bool] = None,
+                 frozen_cases: list | None = None):
         self.cont = cont
         self.cfg = cfg or AgentConfig()
         self.gate = (os.getenv("PA_GATE", "1").lower() in ("1", "true", "yes")
                      if gate is None else gate)
+        # freeze the experience library for this run (reproducible); snapshot once here
+        # if the caller didn't hand one down
+        self.frozen_cases = load_all_cases() if frozen_cases is None else frozen_cases
         self.render_dir = Path(render_dir) if render_dir else Path(tempfile.gettempdir())
         self.render_dir.mkdir(parents=True, exist_ok=True)
         self.decisions: list[dict] = []  # every bar: decision | gated | error (for journal)
@@ -58,6 +69,8 @@ class LLMStrategy:
         self.error_types: dict[str, int] = {}  # exception class -> count (diagnosis)
         self.gated = 0                   # bars skipped by the code gate (no LLM call)
         self.cache_hits = 0
+        self.consec_failures = 0         # reset on any success or gated bar
+        self.last_error = ""             # for the RunAborted message
 
     def _record(self, sidecar: dict, decision: dict) -> None:
         t = sidecar.get("bar_time_et", "")
@@ -72,6 +85,7 @@ class LLMStrategy:
             tag = obvious_no_trade(sidecar)
             if tag:
                 self.gated += 1
+                self.consec_failures = 0     # a reachable bar -> not a run-wide outage
                 self._record(sidecar, {"action": "no_trade", "setup": "",
                                        "reason": f"gated: {tag}"})
                 return None
@@ -84,14 +98,19 @@ class LLMStrategy:
             image_path = self.render_dir / f"{session_date}_{current_ts.strftime('%H%M')}.png"
             render_session(self.cont, session_date, up_to=current_ts, out_path=image_path)
         try:
-            d = decide(sidecar, image_path, cfg=self.cfg)
+            d = decide(sidecar, image_path, cfg=self.cfg, cases=self.frozen_cases)
         except Exception as e:  # noqa: BLE001 — any error on THIS bar -> no_trade, day survives
             self.errors += 1
             et = type(e).__name__
             self.error_types[et] = self.error_types.get(et, 0) + 1
+            self.consec_failures += 1
+            self.last_error = f"{et}: {str(e)[:160]}"
             self._record(sidecar, {"action": "error",
                                    "reason": f"{et}: {str(e)[:120]}"})
+            if self.consec_failures >= 4:    # quota/auth outage -> abort the whole run
+                raise RunAborted(self.last_error)
             return None
+        self.consec_failures = 0             # a success clears the streak
         if d.get("_usage", {}).get("cached"):
             self.cache_hits += 1
         self._record(sidecar, d)

@@ -1,4 +1,8 @@
-"""Run the daily-review agent over all journaled sessions -> lessons + experience cases."""
+"""Run the daily-review agent over all journaled sessions -> lessons + experience cases.
+
+PA_JOURNAL_DIR overrides which journal dir is reviewed (default data/journal/mes/am).
+"""
+import os
 import sys
 from pathlib import Path
 
@@ -6,7 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pab.agent import AgentConfig, key_status  # noqa: E402
 from pab.experience import read_cases  # noqa: E402
-from pab.review import JDIR, review_session  # noqa: E402
+from pab.review import JDIR as _DEFAULT_JDIR, review_session  # noqa: E402
+
+JDIR = Path(os.getenv("PA_JOURNAL_DIR", str(_DEFAULT_JDIR)))
 
 
 def main() -> None:
@@ -24,7 +30,7 @@ def main() -> None:
 
     for s in sessions:
         try:
-            r = review_session(s)
+            r = review_session(s, jdir=JDIR)
         except Exception as e:  # noqa: BLE001
             print(f"=== {s} === ERROR: {type(e).__name__}: {str(e)[:140]}\n")
             continue

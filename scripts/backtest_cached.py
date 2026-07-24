@@ -21,6 +21,12 @@ Experiment knobs:
                  working ceil(s/60) minutes into the fill bar. Quantifies what a
                  slow model costs on the SAME cached decisions.
   PA_MAGNET_VETO=0 — disables the first-obstacle R:R veto for A/B replays.
+  PA_EXPERIENCE_SNAPSHOT=<path> — freeze the experience library the cache keys were
+                 built with (the experience block is part of the user text, hence the
+                 key). Replaying a run recorded after experience-snapshotting exists,
+                 point this at that run's <journal_dir>/experience_snapshot.jsonl;
+                 for an older cache, check out the run-era experience/cases.jsonl at
+                 the run-era commit instead. Unset = read the current library live.
 """
 import json
 import os
@@ -42,8 +48,9 @@ RAW_1M = ROOT / "data" / "raw" / "mes_1m.parquet"
 class CacheOnlyStrategy:
     """LLMStrategy's decision path, but the only 'provider' is the disk cache."""
 
-    def __init__(self, cfg: AgentConfig):
+    def __init__(self, cfg: AgentConfig, frozen_cases: list | None = None):
         self.cfg = cfg
+        self.frozen_cases = frozen_cases   # None = read the live library (pre-snapshot runs)
         self.hits = 0
         self.misses = 0
         self.gated = 0
@@ -55,11 +62,12 @@ class CacheOnlyStrategy:
         # mirror decide()'s key construction exactly: regime-routed system + window
         try:
             from pab.features import classify_regime
-            regime = classify_regime(sidecar)
+            regime = classify_regime(sidecar, self.cfg.window)
         except Exception:  # noqa: BLE001
             regime = None
         system = _system(self.cfg.vision, regime, self.cfg.instrument, self.cfg.window)
-        key = _cache_key(self.cfg, system, _user_text(sidecar, regime), None)
+        key = _cache_key(self.cfg, system,
+                         _user_text(sidecar, regime, cases=self.frozen_cases), None)
         f = CACHE_DIR / f"{key}.json"
         if not f.exists():
             self.misses += 1                   # errored/unreached in live run -> no_trade
@@ -81,7 +89,10 @@ def main() -> None:
     m1 = load_bars(RAW_1M) if RAW_1M.exists() else None
     sessions = complete_sessions(cont)[-int(os.getenv("N_SESSIONS", "128")):]
 
-    strat = CacheOnlyStrategy(cfg)
+    snap = os.getenv("PA_EXPERIENCE_SNAPSHOT")   # freeze experience -> cache-key parity
+    frozen_cases = ([json.loads(x) for x in Path(snap).read_text("utf-8").splitlines()
+                     if x.strip()] if snap else None)
+    strat = CacheOnlyStrategy(cfg, frozen_cases)
     ecfg = Config(min_rr=float(os.getenv("PA_MIN_RR", "1.0")),
                   decision_latency_s=float(os.getenv("PA_LATENCY", "0")),
                   magnet_veto=os.getenv("PA_MAGNET_VETO", "1") not in ("0", "false"))

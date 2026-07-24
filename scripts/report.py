@@ -2,10 +2,10 @@
 
 Usage:
     PA_CAPITAL=5000 python scripts/report.py            # backtest journals
-    PA_JOURNAL_DIR=data/journal_live python scripts/report.py   # live line
+    PA_JOURNAL_DIR=data/journal/spy/live python scripts/report.py   # live line
 Env:
     PA_CAPITAL     account capital for capital-relative metrics (default 5000)
-    PA_JOURNAL_DIR journal directory (default data/journal)
+    PA_JOURNAL_DIR journal directory (default data/journal/mes/am)
     PA_SPLIT_DATE  optional: report <=date and >date segments separately
                    (default 2026-02-18 = experience-contamination boundary)
 """
@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pab.metrics import capital_metrics  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-JDIR = ROOT / os.getenv("PA_JOURNAL_DIR", "data/journal")
+JDIR = ROOT / os.getenv("PA_JOURNAL_DIR", "data/journal/mes/am")
 CAPITAL = float(os.getenv("PA_CAPITAL", "5000"))
 SPLIT = os.getenv("PA_SPLIT_DATE", "2026-02-18")
 
