@@ -1,10 +1,11 @@
 """Load Databento OHLCV-1m exports -> clean continuous 1-min + 5-min parquets, per root.
 
-Input : data/databento/*.ohlcv-1m.json.zst  (parent .FUT = all contracts, UTC, pretty px).
+Input : data/databento/*.ohlcv-1m.{json,dbn}.zst  (parent .FUT = all contracts, UTC,
+        pretty px; JSON lines or Databento binary — both decode to the same frame).
         Multiple exports may be extracted into data/databento/ side by side (e.g. the
         2024-25 MES history next to the 2026 MES file, and an MNQ export) — every
         matching file is parsed and concatenated, then split by instrument root.
-Steps : parse JSONL -> tz-convert UTC->ET -> derive each row's instrument ROOT from its
+Steps : parse each export -> tz-convert UTC->ET -> derive each row's instrument ROOT from its
         contract symbol (MESH6 -> MES, MNQU6 -> MNQ; calendar spreads are skipped) ->
         for EACH root: dedupe -> pick the front-month per DAY using the PRIOR day's volume
         winner (no intraday lookahead: at today's open you only know which contract won
@@ -27,12 +28,26 @@ import zstandard as zstd  # noqa: E402
 from pab.bars import contract_root  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = sorted(glob.glob(str(ROOT / "data" / "databento" / "*.ohlcv-1m.json.zst")))
+SRC = sorted(glob.glob(str(ROOT / "data" / "databento" / "*.ohlcv-1m.json.zst"))
+             + glob.glob(str(ROOT / "data" / "databento" / "*.ohlcv-1m.dbn.zst")))
 OUT_DIR = ROOT / "data" / "raw"
 ET = "America/New_York"
 
 
 def read_records(path: str) -> pd.DataFrame:
+    if path.endswith(".dbn.zst"):
+        import databento as db  # optional dep: only needed for the binary exports
+        df = db.DBNStore.from_file(path).to_df()  # tz-aware UTC index, decimal px, int vol
+        if "symbol" not in df.columns:
+            raise SystemExit(f"{path}: DBNStore.to_df() returned no 'symbol' column — "
+                             "cannot derive contract roots (re-export with symbology on)")
+        # normalize to the same frame as the JSON branch below (outrights like MESH4 plus
+        # spreads MESH4-MESM4; contract_root() drops the spreads downstream)
+        out = df.reset_index()[["ts_event", "open", "high", "low", "close",
+                                "volume", "symbol"]].copy()
+        out.columns = ["ts", "open", "high", "low", "close", "volume", "symbol"]
+        out["volume"] = out["volume"].astype(int)
+        return out
     with open(path, "rb") as fh:
         text = zstd.ZstdDecompressor().stream_reader(fh).read().decode("utf-8")
     rows = []
@@ -92,8 +107,8 @@ def process_root(root: str, sub: pd.DataFrame) -> None:
 
 def main() -> None:
     if not SRC:
-        print("no .ohlcv-1m.json.zst under data/databento/ — extract the Databento zip(s) "
-              "there first (multiple exports may sit side by side)")
+        print("no .ohlcv-1m.{json,dbn}.zst under data/databento/ — extract the Databento "
+              "zip(s) there first (multiple exports may sit side by side)")
         return
     df = pd.concat([read_records(p) for p in SRC], ignore_index=True)
     df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(ET)

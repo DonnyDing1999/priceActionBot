@@ -9,6 +9,7 @@ openai>=1.40
 pydantic>=2.0
 python-dotenv>=1.0
 zstandard>=0.22    # Databento .json.zst decompression
+databento>=0.30   # DBN decoding for Databento exports
 truststore>=0.9    # use macOS keychain trust (corp TLS interception)
 alpaca-py>=0.21    # SPY live paper line: free IEX data + paper execution
 pytest>=8          # dev: engine/risk tests
