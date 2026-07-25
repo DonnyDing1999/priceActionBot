@@ -128,7 +128,9 @@ def main() -> None:
                 journal.record_decision(s, 0, w_first,
                                         {"action": "no_trade",
                                          "reason": f"day_gate: C ({dayfilter}) "
-                                                   f"{gi.get('reason', '')}"[:220]})
+                                                   f"{gi.get('reason', '')}"[:220]},
+                                        terminal={"stage": "day_gate", "node": "C",
+                                                  "label": f"day gate C ({dayfilter})"[:60]})
                 journal.save(dir=jdir)
                 why = f" | {gi.get('reason', '')[:90]}" if gi else ""
                 print(f"[{s}] C-DAY skipped (day gate){why}", flush=True)
@@ -137,9 +139,17 @@ def main() -> None:
             err_total += strat.errors
             gate_total += strat.gated
             hit_total += strat.cache_hits
+            # WP5: stamp each proposing decision with its downstream risk/engine terminal
+            # (filled | no_fill | risk:<veto tag>), keyed by the signal bar's HH:MM; the
+            # LLM/gate/validator stage tag stamped in _record stands for every other bar.
+            outcomes = {o["time"]: o for o in stats.get("outcomes", [])}
             for d in strat.decisions:
+                o = outcomes.get(d["time"])
+                term = ({"stage": o["stage"], "node": o["node"],
+                         "label": f"{o['stage']}: {o['node']}"[:60]}
+                        if o is not None else None)
                 journal.record_decision(s, d["bar"], d["time"], d["decision"],
-                                        sidecar=d["sidecar"])
+                                        sidecar=d["sidecar"], terminal=term)
             journal.record_trades(s, trades)
             journal.save(dir=jdir)  # flush incrementally so a mid-run check can read journals
             pnl = sum(t.pnl_usd for t in trades)

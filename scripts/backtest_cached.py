@@ -21,6 +21,9 @@ Experiment knobs:
                  working ceil(s/60) minutes into the fill bar. Quantifies what a
                  slow model costs on the SAME cached decisions.
   PA_MAGNET_VETO=0 — disables the first-obstacle R:R veto for A/B replays.
+  PA_ZONE_VETO / PA_PULLBACK_GATE / PA_NO_CHASE / PA_COOLDOWN =0 — disable the WP2
+                 structural vetoes (zone / trend second-entry + counter-trend / climax
+                 no-chase / post-stop cooldown) individually for A/B replays.
   PA_EXPERIENCE_SNAPSHOT=<path> — freeze the experience library the cache keys were
                  built with (the experience block is part of the user text, hence the
                  key). Replaying a run recorded after experience-snapshotting exists,
@@ -63,7 +66,8 @@ class CacheOnlyStrategy:
             regime = classify_regime(sidecar, self.cfg.window)
         except Exception:  # noqa: BLE001
             regime = None
-        system = _system(self.cfg.vision, regime, self.cfg.instrument, self.cfg.window)
+        system = _system(self.cfg.vision, regime, self.cfg.instrument, self.cfg.window,
+                         self.cfg.provider)
         key = _cache_key(self.cfg, system,
                          _user_text(sidecar, regime, cases=self.frozen_cases), None)
         f = CACHE_DIR / f"{key}.json"
@@ -94,9 +98,12 @@ def main() -> None:
     frozen_cases = ([json.loads(x) for x in Path(snap).read_text("utf-8").splitlines()
                      if x.strip()] if snap else None)
     strat = CacheOnlyStrategy(cfg, frozen_cases)
+    _on = lambda k: os.getenv(k, "1") not in ("0", "false")   # noqa: E731
     ecfg = Config(min_rr=float(os.getenv("PA_MIN_RR", "1.0")),
                   decision_latency_s=float(os.getenv("PA_LATENCY", "0")),
-                  magnet_veto=os.getenv("PA_MAGNET_VETO", "1") not in ("0", "false"))
+                  magnet_veto=_on("PA_MAGNET_VETO"),
+                  zone_veto=_on("PA_ZONE_VETO"), pullback_gate=_on("PA_PULLBACK_GATE"),
+                  no_chase=_on("PA_NO_CHASE"), cooldown=_on("PA_COOLDOWN"))
     stats: dict = {}
     trades = []
     per_session_hits: dict[str, int] = {}

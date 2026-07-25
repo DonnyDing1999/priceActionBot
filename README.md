@@ -105,7 +105,10 @@ PA_PROVIDER=claude_cli .venv/bin/python scripts/review_day.py
 | PA_MODEL | 随通道 | 模型覆盖 |
 | PA_TEMPERATURE | 0.1 | 低温度保证回测可复现 |
 | PA_CACHE | 1 | 磁盘决策缓存,同样输入不重复调用 |
-| PA_ROUTE | 1 | 按 regime 只带相关知识卡片 |
+| PA_ROUTE | auto | auto=按通道选(anthropic/claude_cli 全量 KB 吃缓存,zhipu/gemini 按 regime 子集);1 强制子集;0 强制全量 |
+| PA_SIDECAR_V2 | 1 | sidecar v2 特征(分区/H1H2 计数/工作区间);0 复现旧字节 |
+| PA_DECISION_V2 | 1 | 决策契约 v2(echo/override/next_bar/limit);0 复现旧提示词 |
+| PA_ZONE_VETO / PA_PULLBACK_GATE / PA_NO_CHASE / PA_COOLDOWN | 1 | v5 结构否决层各开关(回放 A/B 用) |
 | PA_DAYFILTER | overlap | 日级停手开关,off 关闭 |
 | PA_GATE | 1 | bar 级零成本预筛 |
 | PA_RISK_USD | 75 | 单笔风险上限 |

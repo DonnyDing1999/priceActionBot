@@ -47,9 +47,16 @@ class Journal:
 
     def record_decision(self, session: str, bar: int, bar_time: str,
                         decision: dict, image: Optional[str] = None,
-                        sidecar: Optional[dict] = None) -> None:
+                        sidecar: Optional[dict] = None,
+                        terminal: Optional[dict] = None) -> None:
         keep = {k: decision.get(k) for k in
                 ("action", "setup", "stop", "target", "confidence", "reason")}
+        # WP5 terminal taxonomy (additive; absent on legacy journals): an explicit
+        # `terminal` (the runner's downstream risk/engine outcome) wins over the
+        # decision's own stage tag stamped by LLMStrategy.terminal_for.
+        term = terminal if terminal is not None else decision.get("terminal")
+        if term is not None:
+            keep["terminal"] = term
         self._bucket(session)["decisions"].append(
             {"bar": bar, "time": bar_time, "decision": keep,
              "context": _brief(sidecar) if sidecar else None, "image": image})

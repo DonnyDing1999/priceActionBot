@@ -5,6 +5,8 @@ this is safe to call bar-by-bar inside the event-driven backtest.
 """
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 
 from pab.bars import ET, add_ema, prior_rth_close
@@ -165,7 +167,7 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
     elif n_s >= 2 and sh[-1] >= sh[-2] and sl[-1] <= sl[-2]:
         pattern = "outside"
 
-    return {
+    out = {
         "symbol": symbol,
         "session_date": str(session_date),
         "bar_time_et": current_ts.strftime("%Y-%m-%d %H:%M %Z"),
@@ -199,6 +201,79 @@ def build_sidecar(cont: pd.DataFrame, current_ts: pd.Timestamp, *,
                     "per_trade_risk_pts": round(spec.per_trade_risk_pts, 2),
                     "qty": spec.qty}),
     }
+
+    # sidecar v2 (PA_SIDECAR_V2, default on): purely ADDITIVE Brooks context reusing the
+    # arrays/magnets above — with the flag "0" the dict above is returned byte-identical.
+    if os.getenv("PA_SIDECAR_V2", "1") != "0":
+        avg_range_10 = (round(float((sh[-10:] - sl[-10:]).mean()), 2) if n_s
+                        else round(rng, 2))
+
+        # working range = session extreme vs the overnight/yday magnets that exist;
+        # session listed first so it wins ties. price_position locates c within it (0..1).
+        mag = {m["name"]: m["px"] for m in magnets}
+        hi_c = [("session", sess_hi)] + [(nm, mag[nm]) for nm in
+                                         ("overnight_high", "yday_high") if nm in mag]
+        lo_c = [("session", sess_lo)] + [(nm, mag[nm]) for nm in
+                                         ("overnight_low", "yday_low") if nm in mag]
+        src_hi, wr_hi = max(hi_c, key=lambda kv: kv[1])
+        src_lo, wr_lo = min(lo_c, key=lambda kv: kv[1])
+        wr_hi, wr_lo = round(wr_hi, 2), round(wr_lo, 2)
+        span = wr_hi - wr_lo
+        pos = max(0.0, min(1.0, (c - wr_lo) / span)) if span > 0 else 0.5
+        zone = ("lower_third" if pos < 1/3 else
+                "middle" if pos < 2/3 else "upper_third")
+
+        # leg direction: EMA side is the spine; the last confirmed swing breaks only the
+        # exact c==ema tie (a clear trend must not flip on a transient pivot).
+        if c > ema:
+            leg = "bull"
+        elif c < ema:
+            leg = "bear"
+        else:
+            lab0 = swings[-1].split("@", 1)[0] if swings else ""
+            leg = ("bull" if lab0 in ("HH", "HL")
+                   else "bear" if lab0 in ("LL", "LH") else "none")
+
+        # count pullback RESUMPTIONS within the leg (Brooks H1/H2/H3, mirror L1/L2/L3),
+        # cap 3; a strong opposite trend bar (body >= 1.2*avg_range_10) resets to 0.
+        types = [_bar_type(float(so[k]), float(sh[k]), float(sl[k]), float(sc[k]))
+                 for k in range(n_s)]
+        count, in_pb, reset_bar, last_label = 0, False, None, ""
+        if leg in ("bull", "bear"):
+            opp = "trend_bear" if leg == "bull" else "trend_bull"
+            thr = 1.2 * avg_range_10
+            for k in range(1, n_s):
+                if types[k] == opp and abs(float(sc[k] - so[k])) >= thr:
+                    count, last_label, in_pb, reset_bar = 0, "", False, k + 1
+                    continue
+                if not in_pb:
+                    in_pb = bool((sl[k] < sl[k-1]) if leg == "bull"
+                                 else (sh[k] > sh[k-1]))
+                else:
+                    resume = (sh[k] > sh[k-1]) if leg == "bull" else (sl[k] < sl[k-1])
+                    if resume:
+                        count = min(count + 1, 3)
+                        last_label = ("H" if leg == "bull" else "L") + str(count)
+                        in_pb = False
+
+        # run of same-direction trend bars ending at the current bar (a doji breaks it)
+        if n_s and types[-1] in ("trend_bull", "trend_bear"):
+            cdir = "bull" if types[-1] == "trend_bull" else "bear"
+            n_run, k = 0, n_s - 1
+            while k >= 0 and types[k] == types[-1]:
+                n_run, k = n_run + 1, k - 1
+        else:
+            cdir, n_run = "none", 0
+
+        out["avg_range_10"] = avg_range_10
+        out["working_range"] = {"hi": wr_hi, "lo": wr_lo,
+                                "src_hi": src_hi, "src_lo": src_lo}
+        out["price_position"] = round(pos, 2)
+        out["zone"] = zone
+        out["hl_count"] = {"dir": leg, "count": count,
+                           "last_label": last_label, "reset_bar": reset_bar}
+        out["consec_trend_bars"] = {"dir": cdir, "n": n_run}
+    return out
 
 
 def classify_regime(sidecar: dict, window: str = "am") -> str:

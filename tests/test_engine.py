@@ -640,3 +640,160 @@ def test_metrics_per_trade_cap_usd_param():
     # a tighter $50 cap makes the same $50 risk use its full budget (min(1.0, 50/50))
     d50 = capital_metrics(trades, n_sessions=1, per_trade_cap_usd=50.0)
     assert d50["trading"]["risk_budget_usage_median_pct"] == 100.0
+
+
+# ---------- WP3: real resting limit entries ----------
+# Limit fills are conservative and take NO slippage: filled only when a working bar/minute
+# trades THROUGH the resting price by >=1 tick (fill AT the price), or opens through it
+# (fill at that better open). The order rests for cfg.limit_ttl_bars bars, then cancels.
+# `magnet_veto=False` isolates the fill mechanics from the ema20 first-obstacle veto (a
+# below-market long limit always sits under the ema, which would otherwise cap its R:R).
+
+def test_limit_missing_px_degrades_to_market():
+    # entry_type "limit" with no entry_px -> behaves byte-for-byte like a market entry
+    cont = mk5([(100, 101, 99, 100.5), (101, 102, 100.5, 101), (105, 111, 104, 110)])
+    st = {}
+    lim = run_session(cont, SESSION,
+                      fire_at(1, Signal("long", stop=95.5, target=110.5,
+                                        entry_type="limit")), stats=st)   # entry_px None
+    mkt = run_session(cont, SESSION,
+                      fire_at(1, Signal("long", stop=95.5, target=110.5,
+                                        entry_type="market")))
+    assert len(lim) == 1 and len(mkt) == 1
+    assert lim[0].entry == mkt[0].entry == 101.25          # next open 101 + 1 tick slip
+    assert lim[0].exit_reason == mkt[0].exit_reason == "target"
+    assert st.get("limit_missing_px") == 1                 # degrade counted, no resting order
+
+
+def test_limit_fill_requires_trade_through():
+    cfg = Config(magnet_veto=False)
+    sig = Signal("long", stop=97.0, target=106.0, entry_type="limit", entry_px=100.0)
+    base = (101, 101.5, 100.5, 101)                        # signal bar (i=0), j=1
+    # touch-exactly (low == entry_px) on every working bar -> NEVER fills
+    touch = mk5([base, (101, 101.2, 100.0, 100.5), (101, 101.2, 100.0, 100.5)])
+    assert run_session(touch, SESSION, fire_at(1, sig), cfg) == []
+    # trade-through by exactly 1 tick (low == entry_px - tick) -> fills AT 100.0, no slip
+    through = mk5([base, (101, 101.2, 99.75, 100.5), (102, 106.5, 101, 106.2)])
+    t = run_session(through, SESSION, fire_at(1, sig), cfg)
+    assert len(t) == 1 and t[0].entry == 100.0             # filled at the limit, no slippage
+    assert t[0].exit_reason == "target" and t[0].exit == 106.0
+
+
+def test_limit_open_through_price_improvement():
+    cfg = Config(magnet_veto=False)
+    sig = Signal("long", stop=97.0, target=106.0, entry_type="limit", entry_px=100.0)
+    # the working bar OPENS below the resting price -> fill at that (better) open, no slip
+    cont = mk5([(101, 101.5, 100.5, 101),                  # signal bar (i=0), j=1
+                (99.5, 100.2, 99.0, 100.0),                # opens 99.5 < 100 -> fill @99.5
+                (100, 106.5, 99.8, 106.2)])                # target hit
+    t = run_session(cont, SESSION, fire_at(1, sig), cfg)
+    assert len(t) == 1 and t[0].entry == 99.5              # price improvement, NOT 100 nor +slip
+    assert t[0].exit_reason == "target"
+
+
+def test_limit_ttl_expiry():
+    cfg = Config(magnet_veto=False, limit_ttl_bars=3)
+    sig = Signal("long", stop=97.0, target=106.0, entry_type="limit", entry_px=100.0)
+    # price never comes within 1 tick of 100 across the full 3-bar TTL -> canceled
+    flat = (101, 101.5, 100.5, 101)
+    cont = mk5([flat, flat, flat, flat, flat])             # bar0 signal; working bars 1,2,3
+    st = {}
+    assert run_session(cont, SESSION, fire_at(1, sig), cfg, stats=st) == []
+    assert st.get("limit_expired") == 1 and "limit_halted" not in st
+    assert st.get("signals") == 1                          # exactly one order was placed
+
+
+def test_limit_halt_cancel_when_session_ends_before_ttl():
+    # the session runs out of tradeable bars before the TTL elapses -> "limit_halted",
+    # distinct from a full TTL expiry
+    cfg = Config(magnet_veto=False, window_end="09:35", flat_by="09:40", limit_ttl_bars=3)
+    sig = Signal("long", stop=97.0, target=106.0, entry_type="limit", entry_px=100.0)
+    flat = (101, 101.5, 100.5, 101)
+    cont = mk5([flat, flat, flat])                         # only 2 working bars exist (1,2)
+    st = {}
+    assert run_session(cont, SESSION, fire_at(1, sig), cfg, stats=st) == []
+    assert st.get("limit_halted") == 1 and "limit_expired" not in st
+
+
+def test_limit_m1_fill_minute_and_exit_ordering():
+    # The 5m fill bar's range spans a target spike (pre-fill) AND the trade-through fill.
+    # 5m-only conservatively takes the spike as a same-bar exit; m1 shows the spike is in
+    # minute 0 (before the limit fills in minute 2), so exits only count from the fill minute.
+    cfg = Config(magnet_veto=False)
+    sig = Signal("long", stop=95.0, target=106.0, entry_type="limit", entry_px=100.0)
+    cont = mk5([(101, 101.5, 100.5, 101),                  # 09:30 signal (i=0), j=1
+                (101, 106.5, 99.5, 100.2),                 # 09:35 fill bar: spike + fill
+                (100.2, 106.5, 100, 106.2)])               # 09:40 target, post-fill
+    no_m1 = run_session(cont, SESSION, fire_at(1, sig), cfg)
+    assert no_m1[0].entry == 100.0 and no_m1[0].exit_reason == "target"
+    assert no_m1[0].exit_ts == "09:35"                     # whole-5m range takes the spike
+    m1 = mk1("09:35", [(100.5, 106.5, 100.4, 105),         # min0: spike to target -> PRE-FILL
+                       (105, 105.2, 101, 101.5),           # min1: pulling back, no fill
+                       (101.5, 101.6, 99.5, 100),          # min2: low 99.5 -> FILL @100
+                       (100, 100.5, 99.8, 100.2),          # min3
+                       (100.2, 100.4, 100, 100.3)])        # min4: no exit on the fill bar
+    with_m1 = run_session(cont, SESSION, fire_at(1, sig), cfg, m1=m1)
+    assert len(with_m1) == 1
+    assert with_m1[0].entry == 100.0 and with_m1[0].entry_ts == "09:35"
+    assert with_m1[0].exit_reason == "target"
+    assert with_m1[0].exit_ts == "09:40"                   # pre-fill spike correctly excluded
+
+
+def test_limit_latency_misses_early_trade_through():
+    # decision_latency delays the limit's activation into the fill bar (parity with stops):
+    # a trade-through in minute 0 is missed when the order isn't working yet.
+    sig = Signal("long", stop=95.0, target=106.0, entry_type="limit", entry_px=100.0)
+    flat = (101, 101.5, 100.5, 101)
+    cont = mk5([flat, (101, 101.5, 99.5, 100.5), flat, flat])   # bar1 dips only in minute 0
+    m1 = mk1("09:35", [(101, 101.2, 99.5, 100),            # min0: through 100 -- only here
+                       (100, 100.4, 100.0, 100.2),         # min1: low 100.0, no through
+                       (100.2, 100.5, 100.1, 100.3),
+                       (100.3, 100.6, 100.2, 100.4),
+                       (100.4, 100.7, 100.3, 100.5)])
+    inst = run_session(cont, SESSION, fire_at(1, sig), Config(magnet_veto=False), m1=m1)
+    assert len(inst) == 1 and inst[0].entry == 100.0       # instant: fills in minute 0
+    st = {}
+    late = run_session(cont, SESSION, fire_at(1, sig),
+                       Config(magnet_veto=False, decision_latency_s=60), m1=m1, stats=st)
+    assert late == [] and st.get("limit_expired") == 1     # 60s latency: minute-0 fill missed
+
+
+def test_limit_cancel_if_hook_cancels_before_fill():
+    # the `cancel_if` hook (WP2 wires regime-flip here) is evaluated on each working bar
+    # BEFORE the fill scan; a truthy return cancels the resting order
+    cfg = Config(magnet_veto=False)
+    sig = Signal("long", stop=97.0, target=106.0, entry_type="limit", entry_px=100.0)
+    cont = mk5([(101, 101.5, 100.5, 101),                  # signal (i=0), j=1
+                (101, 101.2, 99.5, 100.5),                 # would fill (trades through 100)
+                (102, 106.5, 101, 106.2)])
+    calls = []
+
+    def cancel_if(ts):
+        calls.append(ts)
+        return True
+
+    st = {}
+    trades = run_session(cont, SESSION, fire_at(1, sig), cfg, stats=st, cancel_if=cancel_if)
+    assert trades == [] and st.get("limit_canceled") == 1  # canceled despite the through-bar
+    assert len(calls) == 1                                 # hook fired on the first working bar
+    # sanity: the very same bar fills when the hook is absent
+    assert len(run_session(cont, SESSION, fire_at(1, sig), cfg)) == 1
+
+
+def test_stop_and_market_paths_unchanged_by_limit_refactor():
+    # regression: the stop and market fills must be byte-for-byte what they were before WP3
+    cont_s = mk5([(100, 101, 99, 100.5), (100.75, 101.5, 100.25, 101),
+                  (102, 106.75, 101.5, 106.5)])
+    ts = run_session(cont_s, SESSION,
+                     fire_at(1, Signal("long", stop=96.0, target=106.5, entry_type="stop")))
+    assert len(ts) == 1 and ts[0].entry == 101.5 and ts[0].risk_pts == 5.25
+    assert ts[0].exit_reason == "target"
+    cont_m = mk5([(100, 101, 99, 100.5), (101, 102, 100.5, 101), (105, 111, 104, 110)])
+    st = {}
+    tm = run_session(cont_m, SESSION,
+                     fire_at(1, Signal("long", stop=95.5, target=110.5,
+                                       entry_type="market")), stats=st)
+    assert len(tm) == 1 and tm[0].entry == 101.25 and tm[0].exit_reason == "target"
+    # no limit-specific bookkeeping leaks onto the non-limit paths
+    for leak in ("limit_missing_px", "limit_expired", "limit_halted", "limit_canceled"):
+        assert leak not in st

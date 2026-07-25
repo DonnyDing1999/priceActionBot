@@ -33,6 +33,33 @@ LAST_SIGNAL_BAR = 19  # a signal here fills at bar 20 (11:05). Entries stay in t
                       # their stop/target (engine force-flats only at end of day)
 
 
+def terminal_for(decision: dict) -> dict:
+    """WP5 terminal taxonomy: tag each recorded decision with the stage it TERMINATED at
+    and a short node/label, so the journal (and veto_replay) can bucket outcomes without
+    re-parsing free-text reasons. Stages: day_gate | code_gate | llm | validator | risk |
+    engine. This function covers the stages knowable at decision-record time (day_gate is
+    emitted by the runner; risk/engine outcomes are stamped by the runner from engine
+    stats). label is capped at 60 chars per the contract."""
+    action = decision.get("action")
+    reason = str(decision.get("reason", "") or "")
+    if action == "error":
+        return {"stage": "llm", "node": "error", "label": ("error: " + reason)[:60]}
+    tr = decision.get("terminal_reason")            # WP4 validator/retry downgrade
+    if tr:
+        return {"stage": "validator", "node": str(tr),
+                "label": ("validator: " + str(tr))[:60]}
+    if reason.startswith("day_gate:"):              # runner C-day skip routed through here
+        return {"stage": "day_gate", "node": "C", "label": reason[:60]}
+    if reason.startswith("gated:"):                 # obvious_no_trade code gate
+        tag = reason.split("gated:", 1)[1].strip() or "gated"
+        return {"stage": "code_gate", "node": tag, "label": ("code gate: " + tag)[:60]}
+    if action in ("long", "short"):                 # LLM proposed a trade (risk/engine next)
+        label = f"{action} {decision.get('setup', '') or ''} " \
+                f"{decision.get('entry_type', '') or ''}".strip()
+        return {"stage": "llm", "node": "proposed", "label": label[:60]}
+    return {"stage": "llm", "node": "no_setup", "label": (reason or "no_trade")[:60]}
+
+
 def obvious_no_trade(sidecar: dict) -> Optional[str]:
     """Mechanical pre-filter: bars that can be skipped without asking the LLM. Kept
     minimal and conservative — when in doubt, ask the LLM. Returns a tag or None."""
@@ -70,6 +97,9 @@ class LLMStrategy:
     def _record(self, sidecar: dict, decision: dict) -> None:
         t = sidecar.get("bar_time_et", "")
         parts = t.split(" ")
+        # WP5: stamp the terminal taxonomy additively (copy so decide()'s dict is untouched).
+        # The runner may later OVERRIDE this with the downstream risk/engine outcome.
+        decision = {**decision, "terminal": terminal_for(decision)}
         self.decisions.append({
             "bar": sidecar.get("bar_index_from_open"),
             "time": parts[1] if len(parts) > 1 else t,  # HH:MM
@@ -108,6 +138,9 @@ class LLMStrategy:
     def _to_signal(d: dict, sidecar: dict) -> Optional[Signal]:
         # Raw LLM proposal -> Signal. Geometry / per-trade cap / R:R are enforced
         # authoritatively by the code risk layer (pab.risk.RiskManager), not here.
+        # A validator-downgraded dict has action=="no_trade" (+ terminal_reason), so it
+        # returns None here; _record() already journals the full decision dict, so the
+        # terminal_reason flows into the journal unchanged.
         if not d or d.get("action") not in ("long", "short"):
             return None
         stop, target = d.get("stop"), d.get("target")
@@ -116,5 +149,11 @@ class LLMStrategy:
         reason = f"{d.get('setup', '')}: {str(d.get('reason', ''))[:120]}"
         entry_type = d.get("entry_type") if d.get("entry_type") in ("stop", "limit",
                                                                     "market") else "market"
-        return Signal(d["action"], float(stop), float(target), reason,
-                      entry_type=entry_type)
+        epx = d.get("entry_px")
+        epx = float(epx) if isinstance(epx, (int, float)) and not isinstance(epx, bool) else None
+        try:  # WP3 adds Signal.entry_px; stay compatible before that change lands
+            return Signal(d["action"], float(stop), float(target), reason,
+                          entry_type=entry_type, entry_px=epx)
+        except TypeError:
+            return Signal(d["action"], float(stop), float(target), reason,
+                          entry_type=entry_type)
