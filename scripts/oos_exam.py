@@ -65,6 +65,10 @@ def main() -> None:
         "temperature": cfg.temperature,
         "dayfilter": os.getenv("PA_DAYFILTER", "overlap"),
         "bars": os.getenv("PA_BARS"), "slice": os.getenv("PA_SLICE"),
+        "sessions_file": os.getenv("PA_SESSIONS_FILE"),
+        "sessions_file_sha": (hashlib.sha256(
+            Path(os.getenv("PA_SESSIONS_FILE")).read_bytes()).hexdigest()
+            if os.getenv("PA_SESSIONS_FILE") else None),
         "experience_sha": (hashlib.sha256(EXPERIENCE.read_bytes()).hexdigest()
                            if EXPERIENCE.exists() else None),
         "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),

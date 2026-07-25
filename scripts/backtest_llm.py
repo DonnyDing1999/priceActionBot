@@ -59,8 +59,17 @@ def main() -> None:
     cont = load_bars(raw)
     m1 = load_bars(raw_1m) if raw_1m.exists() else None
     all_sessions = complete_sessions(cont, first=w_first, last=w_last)
+    sfile = os.getenv("PA_SESSIONS_FILE")  # explicit date list (one YYYY-MM-DD per line)
     sl = os.getenv("PA_SLICE")           # e.g. "0:20" = first 20 sessions; overrides N_SESSIONS
-    if sl:
+    if sfile:                            # pre-registered scattered sample (e.g. OOS exam)
+        want = {ln.strip() for ln in Path(sfile).read_text("utf-8").splitlines()
+                if ln.strip()}
+        sessions = [s for s in all_sessions if s in want]
+        missing = want - set(sessions)
+        if missing:
+            print(f"warning: {len(missing)} requested sessions not in data: "
+                  f"{sorted(missing)[:5]}...", flush=True)
+    elif sl:
         a, _, b = sl.partition(":")
         sessions = all_sessions[int(a or 0):(int(b) if b else None)]
     else:
