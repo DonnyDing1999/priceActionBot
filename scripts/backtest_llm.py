@@ -5,6 +5,7 @@ Provider/model from .env (PA_PROVIDER / PA_MODEL). Env knobs:
     PA_WORKERS = concurrent sessions (default 3; launches are still globally spaced by
                  ZHIPU_MIN_INTERVAL, but long response waits overlap)
     PA_BARS    = 5m parquet under data/raw/ (default mes_5m.parquet)
+    PA_EXPERIENCE_FILE = experience JSONL to read instead of the live library
     PA_CACHE/PA_GATE/PA_TEMPERATURE — see pab.agent / pab.llm_strategy
 
 Per session: fresh LLMStrategy (per-session state) + engine stats; every decision
@@ -81,7 +82,10 @@ def main() -> None:
           f"dayfilter={dayfilter} window={window}")
     print(f"{len(sessions)} sessions {sessions}\n", flush=True)
 
-    cases = load_all_cases()   # snapshot the experience library ONCE for the whole run
+    # snapshot the experience library ONCE for the whole run; PA_EXPERIENCE_FILE swaps the
+    # source (e.g. a period-filtered exam set) — the snapshot below then records THAT set
+    expf = os.getenv("PA_EXPERIENCE_FILE")
+    cases = load_all_cases(Path(expf)) if expf else load_all_cases()
 
     def run_one(s: str):
         # day-level chop gate: a C-graded day is skipped entirely (no per-bar LLM calls).

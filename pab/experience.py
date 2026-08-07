@@ -32,12 +32,14 @@ def add_cases(cases: list[dict], session: str, instrument: str = "mes",
     return n
 
 
-def load_all_cases() -> list[dict]:
+def load_all_cases(path: Path | None = None) -> list[dict]:
     """Full JSONL parse in file order ([] if missing). Snapshot this ONCE per run and
-    feed it to select_cases so a run's experience retrieval is frozen (reproducible)."""
-    if not CASES.exists():
+    feed it to select_cases so a run's experience retrieval is frozen (reproducible).
+    `path` swaps the source file (e.g. a period-filtered exam set); None = the live library."""
+    src = path or CASES
+    if not src.exists():
         return []
-    return [json.loads(x) for x in CASES.read_text("utf-8").splitlines() if x.strip()]
+    return [json.loads(x) for x in src.read_text("utf-8").splitlines() if x.strip()]
 
 
 def select_cases(cases: list[dict], regime: str | tuple[str, ...] | None = None,

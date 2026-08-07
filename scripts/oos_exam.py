@@ -10,8 +10,14 @@ mechanical parts and leaves the honesty to you:
   * stamps a manifest (HEAD sha, config, experience sha) BEFORE the run, so the exact
     frozen artifact under test is on the record, then marks it completed afterwards.
 
+A LATER frozen lineage takes its own one-shot exam under PA_EXAM_ID: the manifest is
+namespaced per exam id, so a new hypothesis is unblocked without unblocking (or touching)
+an earlier exam's manifest — the unversioned path stays permanently spent.
+
 Env: PA_BARS (required — the held-out OOS 5m parquet), PA_SLICE (optional), plus the
-usual PA_PROVIDER / PA_MODEL / PA_INSTRUMENT / PA_WINDOW / PA_DAYFILTER.
+usual PA_PROVIDER / PA_MODEL / PA_INSTRUMENT / PA_WINDOW / PA_DAYFILTER, and
+PA_EXAM_ID (exam namespace) / PA_EXPERIENCE_FILE (experience set the run reads) /
+PA_EXAM_CRITERIA (pre-registered pass/fail text, stamped at freeze time).
 """
 import hashlib
 import json
@@ -37,6 +43,28 @@ def _dirty_tracked() -> list[str]:
     return [ln for ln in out if ln and not ln.startswith("??")]
 
 
+def _manifest_path(jdir: Path) -> Path:
+    """One manifest per exam id; unset PA_EXAM_ID = the legacy unversioned path (which the
+    first exam's manifest keeps blocked forever)."""
+    exam = os.getenv("PA_EXAM_ID")
+    return jdir / (f"oos_manifest_{exam}.json" if exam else "oos_manifest.json")
+
+
+def _experience_path() -> Path:
+    """The experience file the run will ACTUALLY read — the sha must cover that file, not
+    the live library, or the manifest records a set the exam never saw."""
+    exp = os.getenv("PA_EXPERIENCE_FILE")
+    return Path(exp) if exp else EXPERIENCE
+
+
+def _rel(p: Path) -> str:
+    """Repo-relative when inside ROOT, else absolute."""
+    try:
+        return str(p.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(p)
+
+
 def main() -> None:
     dirty = _dirty_tracked()
     if dirty:
@@ -48,11 +76,18 @@ def main() -> None:
     if not os.getenv("PA_BARS"):
         print("refusing: set PA_BARS to the held-out OOS 5m parquet (e.g. mnq_5m.parquet)")
         sys.exit(1)
+    exp = _experience_path()
+    if os.getenv("PA_EXPERIENCE_FILE") and not exp.exists():   # a typo here = empty library
+        print(f"refusing: PA_EXPERIENCE_FILE={exp} does not exist — the exam would burn "
+              "its one shot on an EMPTY experience library.")
+        sys.exit(1)
 
     cfg = AgentConfig()
-    manifest_path = journal_dir(cfg.instrument, cfg.window) / "oos_manifest.json"
+    exam_id = os.getenv("PA_EXAM_ID")
+    manifest_path = _manifest_path(journal_dir(cfg.instrument, cfg.window))
     if manifest_path.exists():
-        print(f"refusing: exam already taken for {cfg.instrument}/{cfg.window} — one shot "
+        tag = f"{cfg.instrument}/{cfg.window}" + (f" exam '{exam_id}'" if exam_id else "")
+        print(f"refusing: exam already taken for {tag} — one shot "
               f"only ({manifest_path}). Peeking-and-tweaking is exactly what this prevents.")
         sys.exit(3)
 
@@ -60,6 +95,7 @@ def main() -> None:
                           capture_output=True, text=True).stdout.strip()
     manifest = {
         "instrument": cfg.instrument, "window": cfg.window,
+        "exam_id": exam_id,
         "git_head": head,
         "provider": cfg.provider, "model": cfg.resolved_model(),
         "temperature": cfg.temperature,
@@ -69,8 +105,10 @@ def main() -> None:
         "sessions_file_sha": (hashlib.sha256(
             Path(os.getenv("PA_SESSIONS_FILE")).read_bytes()).hexdigest()
             if os.getenv("PA_SESSIONS_FILE") else None),
-        "experience_sha": (hashlib.sha256(EXPERIENCE.read_bytes()).hexdigest()
-                           if EXPERIENCE.exists() else None),
+        "experience_file": _rel(exp),
+        "experience_sha": (hashlib.sha256(exp.read_bytes()).hexdigest()
+                           if exp.exists() else None),
+        "criteria": os.getenv("PA_EXAM_CRITERIA"),   # pre-registered verdict rule, frozen here
         "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
